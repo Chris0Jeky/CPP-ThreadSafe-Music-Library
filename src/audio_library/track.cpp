@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <regex>
+#include <unordered_map>
 
 namespace audio_library {
 
