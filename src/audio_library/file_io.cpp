@@ -61,14 +61,15 @@ std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
                                          std::to_string(line_number), line_number);
                 }
             }
-        } else if (!options.skip_invalid_lines) {
+        } else {
             ++error_count;
             if (options.error_callback) {
                 options.error_callback("Failed to parse line " + 
                                      std::to_string(line_number) + ": " + line, line_number);
             }
-        } else {
-            ++error_count;
+            if (!options.skip_invalid_lines) {
+                break;
+            }
         }
         
         if (error_count >= options.max_errors) {
@@ -442,7 +443,7 @@ std::optional<std::string> FileIO::detect_file_format(const std::filesystem::pat
     auto ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     
-    if (ext == ".csv" || ext == ".txt") {
+    if (ext == ".csv") {
         if (validate_csv_format(path)) {
             return "csv";
         }
