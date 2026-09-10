@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <iomanip>
 
@@ -390,12 +391,14 @@ bool FileIO::validate_csv_format(const std::filesystem::path& path) {
     
     for (size_t i = 0; i < std::min(fields.size(), size_t(3)); ++i) {
         std::string lower_field = fields[i];
-        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(), ::tolower);
+        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         
         bool found = false;
         for (const auto& header : valid_headers) {
             std::string lower_header = header;
-            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(), ::tolower);
+            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             
             if (lower_field.find(lower_header) != std::string::npos) {
                 found = true;
@@ -441,7 +444,8 @@ bool FileIO::validate_json_format(const std::filesystem::path& path) {
 std::optional<std::string> FileIO::detect_file_format(const std::filesystem::path& path) {
     // Check extension first
     auto ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
     if (ext == ".csv") {
         if (validate_csv_format(path)) {

@@ -41,12 +41,14 @@ std::string Track::format_duration() const {
 bool Track::matches_query(const std::string& query) const {
     // Convert query to lowercase for case-insensitive search
     std::string lower_query = query;
-    std::transform(lower_query.begin(), lower_query.end(), lower_query.begin(), ::tolower);
+    std::transform(lower_query.begin(), lower_query.end(), lower_query.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
     // Check each field
     auto contains_query = [&lower_query](const std::string& field) {
         std::string lower_field = field;
-        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(), ::tolower);
+        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return lower_field.find(lower_query) != std::string::npos;
     };
     
