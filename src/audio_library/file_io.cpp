@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <iomanip>
 
@@ -31,7 +32,7 @@ std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
         auto fields = split_csv_line(line);
         if (fields.size() >= 3) {
             try {
-                std::stoi(fields[2]);
+                static_cast<void>(std::stoi(fields[2]));
                 // It's a data line, process it
                 file.seekg(0);
                 line_number = 0;
@@ -61,14 +62,15 @@ std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
                                          std::to_string(line_number), line_number);
                 }
             }
-        } else if (!options.skip_invalid_lines) {
+        } else {
             ++error_count;
             if (options.error_callback) {
                 options.error_callback("Failed to parse line " + 
                                      std::to_string(line_number) + ": " + line, line_number);
             }
-        } else {
-            ++error_count;
+            if (!options.skip_invalid_lines) {
+                break;
+            }
         }
         
         if (error_count >= options.max_errors) {
@@ -389,12 +391,14 @@ bool FileIO::validate_csv_format(const std::filesystem::path& path) {
     
     for (size_t i = 0; i < std::min(fields.size(), size_t(3)); ++i) {
         std::string lower_field = fields[i];
-        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(), ::tolower);
+        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         
         bool found = false;
         for (const auto& header : valid_headers) {
             std::string lower_header = header;
-            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(), ::tolower);
+            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             
             if (lower_field.find(lower_header) != std::string::npos) {
                 found = true;
@@ -440,9 +444,10 @@ bool FileIO::validate_json_format(const std::filesystem::path& path) {
 std::optional<std::string> FileIO::detect_file_format(const std::filesystem::path& path) {
     // Check extension first
     auto ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
-    if (ext == ".csv" || ext == ".txt") {
+    if (ext == ".csv") {
         if (validate_csv_format(path)) {
             return "csv";
         }

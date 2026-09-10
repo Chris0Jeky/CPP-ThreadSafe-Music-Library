@@ -266,7 +266,7 @@ TEST_CASE("MusicLibrary thread safety", "[music_library][thread]") {
         }
         
         std::vector<std::thread> threads;
-        std::atomic<int> total_found(0);
+        std::atomic<std::size_t> total_found(0);
         
         for (int t = 0; t < num_threads; ++t) {
             threads.emplace_back([&library, &total_found]() {
