@@ -32,7 +32,7 @@ std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
         auto fields = split_csv_line(line);
         if (fields.size() >= 3) {
             try {
-                std::stoi(fields[2]);
+                static_cast<void>(std::stoi(fields[2]));
                 // It's a data line, process it
                 file.seekg(0);
                 line_number = 0;
