@@ -240,7 +240,7 @@ TEST_CASE("MusicLibrary thread safety", "[music_library][thread]") {
         std::vector<std::thread> threads;
         
         for (int t = 0; t < num_threads; ++t) {
-            threads.emplace_back([&library, t, tracks_per_thread]() {
+            threads.emplace_back([&library, t]() {
                 for (int i = 0; i < tracks_per_thread; ++i) {
                     Track track(
                         "Song " + std::to_string(t * tracks_per_thread + i),
