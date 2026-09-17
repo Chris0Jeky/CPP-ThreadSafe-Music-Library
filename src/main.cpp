@@ -848,10 +848,11 @@ private:
     
     void clear_screen() {
         #ifdef _WIN32
-            std::system("cls");
+            const int clear_result = std::system("cls");
         #else
-            std::system("clear");
+            const int clear_result = std::system("clear");
         #endif
+        (void)clear_result;
     }
 };
 
