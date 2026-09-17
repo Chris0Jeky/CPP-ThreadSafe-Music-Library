@@ -234,7 +234,7 @@ TEST_CASE("MusicLibrary statistics", "[music_library]") {
 TEST_CASE("MusicLibrary thread safety", "[music_library][thread]") {
     MusicLibrary library;
     const int num_threads = 4;
-    const int tracks_per_thread = 25;
+    static constexpr int tracks_per_thread = 25;
     
     SECTION("Concurrent additions") {
         std::vector<std::thread> threads;
