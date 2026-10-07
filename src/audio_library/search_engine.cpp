@@ -200,7 +200,8 @@ std::string SearchEngine::normalize(const std::string& text, bool case_sensitive
     }
     
     std::string normalized = text;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return normalized;
 }
 
