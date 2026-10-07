@@ -1,0 +1,17 @@
+{
+  "tier": 2,
+  "name": "daily-driver",
+  "authority": {
+    "push": "free",
+    "merge": "free"
+  },
+  "flags": {
+    "sensitive_data": false,
+    "wave_mode": false,
+    "dormant_production": false,
+    "relaxed_work_loss_guards": false
+  },
+  "human_todo": null,
+  "last_reviewed": "2026-10-07",
+  "notes": "Owner decision 2026-10-07 (estate-hub session): T2. Measured signal: GitHub Pages built and deployed by deploy-pages.yml; ci.yml present; no releases."
+}
