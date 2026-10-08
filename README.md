@@ -247,7 +247,10 @@ The project includes comprehensive unit tests using Catch2:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+The owner-authored project code is licensed under GNU GPL version 3 only
+(`GPL-3.0-only`). See `LICENSE` and `RELICENSING.md`. The bundled Catch2 header
+`include/catch.hpp` remains under the Boost Software License 1.0; see
+`THIRD_PARTY_NOTICES.md` and `LICENSES/BSL-1.0.txt`.
 
 ## Acknowledgments
 
