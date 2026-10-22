@@ -1,6 +1,7 @@
 #include "../include/catch.hpp"
 #include "audio_library/search_engine.h"
 #include "audio_library/track.h"
+#include <algorithm>
 
 using namespace audio_library;
 
@@ -218,4 +219,47 @@ TEST_CASE("SearchEngine suggestions reflect track removal", "[search_engine]") {
     REQUIRE(engine.get_suggestions("para").empty());
     REQUIRE(engine.get_suggestions("shar").empty());
     REQUIRE(engine.get_indexed_terms_count() == 0);
+}
+
+TEST_CASE("SearchEngine removal preserves prefix words and extensions", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Art", "Shared Shared", 200),
+        std::make_shared<Track>("Artist Artisan", "Shared", 180)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    SECTION("Remove prefix while retaining its extensions") {
+        engine.remove_track(0);
+        auto suggestions = engine.get_suggestions("art");
+        std::sort(suggestions.begin(), suggestions.end());
+        REQUIRE(suggestions == std::vector<std::string>{"artisan", "artist"});
+    }
+    SECTION("Remove extensions while retaining their prefix") {
+        engine.remove_track(1);
+        REQUIRE(engine.get_suggestions("art") == std::vector<std::string>{"art"});
+    }
+    REQUIRE(engine.get_suggestions("shared") == std::vector<std::string>{"shared"});
+}
+
+TEST_CASE("SearchEngine removal is idempotent and permits reindexing", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Art", "Artist", 200)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    engine.remove_track(0);
+    engine.remove_track(0);
+    engine.remove_track(999);
+    REQUIRE(engine.get_suggestions("art").empty());
+    REQUIRE(engine.get_indexed_terms_count() == 0);
+
+    engine.index_track(0, *tracks[0]);
+    REQUIRE(engine.get_suggestions("artist") == std::vector<std::string>{"artist"});
+    REQUIRE(engine.search("art").size() == 1);
+    engine.remove_track(999);
+    REQUIRE(engine.get_suggestions("artist") == std::vector<std::string>{"artist"});
 }
