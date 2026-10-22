@@ -164,6 +164,27 @@ Bohemian Rhapsody,Queen,354,A Night at the Opera,Rock,1975,1543,5.0
 ]
 ```
 
+CSV imports preserve quoted commas, doubled quotes, and embedded LF/CR/CRLF.
+JSON uses UTF-8; Unicode escapes (including surrogate pairs) are decoded. Invalid
+UTF-8, malformed escapes, and malformed JSON documents are rejected.
+
+`FileIO::import_csv` and `import_json` throw `std::runtime_error` on open/read
+failures or resource limits, and invoke `error_callback` when supplied. CSV can
+skip invalid records with `skip_invalid_lines` (the default); set it to `false`
+to reject any invalid track. JSON syntax errors always fail the whole import;
+the same option controls skipping syntactically valid objects with invalid track
+data. Exceeding `max_errors` also fails instead of returning a partial result.
+Defaults cap input at 16 MiB and 100,000 records, and each CSV record at 1 MiB
+and 10,000 physical lines; `ImportOptions` exposes these limits. JSON nesting is
+capped at 64 levels. JSON export throws on invalid UTF-8 metadata.
+
+`MusicLibrary::import_from_csv` and `import_from_json` keep their `bool` API:
+they return `false` for open/read/parse/validation failures and add no tracks
+from invalid input. An empty CSV file or header-only CSV, and a JSON `[]`, are
+valid empty imports. A zero-byte JSON file is invalid. Successful imports ignore
+duplicates already in the library. These guarantees cover input validation;
+they do not provide rollback after an allocation failure while adding tracks.
+
 ## API Documentation
 
 ### Track Class

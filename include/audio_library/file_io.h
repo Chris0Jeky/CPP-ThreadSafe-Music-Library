@@ -22,6 +22,10 @@ public:
         size_t max_errors = 100;
         ProgressCallback progress_callback = nullptr;
         ErrorCallback error_callback = nullptr;
+        size_t max_record_bytes = 1024 * 1024;
+        size_t max_record_lines = 10000;
+        size_t max_input_bytes = 16 * 1024 * 1024;
+        size_t max_tracks = 100000;
     };
     
     struct ExportOptions {
@@ -30,6 +34,8 @@ public:
         ProgressCallback progress_callback = nullptr;
     };
     
+    // Import failures throw std::runtime_error (after error_callback, if set).
+    // CSV may skip invalid records; JSON syntax and resource errors always fail.
     // CSV operations
     static std::vector<Track> import_csv(const std::filesystem::path& path, 
                                         const ImportOptions& options);

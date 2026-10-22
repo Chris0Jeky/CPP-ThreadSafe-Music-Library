@@ -381,7 +381,9 @@ MusicLibrary::Statistics MusicLibrary::get_statistics() const {
 
 bool MusicLibrary::import_from_csv(const std::string& filename) {
     try {
-        auto tracks = FileIO::import_csv(filename);
+        FileIO::ImportOptions options;
+        options.skip_invalid_lines = false;
+        auto tracks = FileIO::import_csv(filename, options);
         
         for (auto& track : tracks) {
             add_track(std::move(track));
@@ -400,7 +402,9 @@ bool MusicLibrary::export_to_csv(const std::string& filename) const {
 
 bool MusicLibrary::import_from_json(const std::string& filename) {
     try {
-        auto tracks = FileIO::import_json(filename);
+        FileIO::ImportOptions options;
+        options.skip_invalid_lines = false;
+        auto tracks = FileIO::import_json(filename, options);
         
         for (auto& track : tracks) {
             add_track(std::move(track));
