@@ -118,6 +118,35 @@ Bohemian Rhapsody,Queen,354,A Night at the Opera,Rock,1975,1543,5.0
 2. Press `1` for Artist
 3. Select artist number to view their tracks
 
+## Updating tracks through the C++ API
+
+Query results are immutable `std::shared_ptr<const Track>` snapshots. Edit a copy
+and submit it with the handle you read:
+
+```cpp
+auto matches = library.find_by_title("Imagine");
+if (!matches.empty()) {
+    auto expected = matches.front();
+    Track edited = *expected;
+    edited.set_album("Updated Album");
+    edited.set_genre("Rock");
+    edited.increment_play_count();
+    if (!library.update_track(expected, edited)) {
+        // Requery and resolve a concurrent edit or a duplicate title/artist pair.
+    }
+}
+```
+
+The update rebuilds lookup and search indexes under the library lock. The old
+handle keeps its original data. A stale, removed, null, or foreign handle is
+rejected. Query again for the new version before another update.
+
+Iteration, filter, comparator, and advanced-search callbacks run on a snapshot
+without holding the library lock. They may call `size()`, `search()`, `add_track`,
+`update_track`, or removal methods; changes apply to subsequent queries and do
+not change the current snapshot. Caller-owned mutable tracks require caller
+synchronization. See the README for source compatibility and GUI migration notes.
+
 ## Troubleshooting
 
 ### "make: command not found"

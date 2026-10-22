@@ -18,7 +18,7 @@ The Audio Library Management System is a modern C++ application that demonstrate
 
 #### 1. **Smart Pointer Memory Management**
 ```cpp
-using TrackPtr = std::shared_ptr<Track>;
+using TrackPtr = std::shared_ptr<const Track>;
 ```
 - Prevents memory leaks through automatic reference counting
 - Enables safe sharing of track objects between multiple indexes

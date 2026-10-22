@@ -789,9 +789,12 @@ private:
                 filename += ".csv";
             }
             
+            std::vector<Track> tracks;
+            tracks.reserve(results.size());
+            for (const auto& track : results) tracks.push_back(*track);
             bool success = filename.find(".json") != std::string::npos
-                ? FileIO::export_json(filename, results)
-                : FileIO::export_csv(filename, results);
+                ? FileIO::export_json(filename, tracks)
+                : FileIO::export_csv(filename, tracks);
                 
             if (success) {
                 std::cout << "✅ Exported to " << filename << "\n";
