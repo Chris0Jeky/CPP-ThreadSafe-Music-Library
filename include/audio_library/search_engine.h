@@ -24,6 +24,7 @@ public:
     
     struct SearchOptions {
         SearchMode mode = SearchMode::SUBSTRING;
+        // Modes match individual tokens. FUZZY counts case differences as edits.
         bool case_sensitive = false;
         bool search_title = true;
         bool search_artist = true;
@@ -65,8 +66,10 @@ private:
         double weight;     // Importance weight for ranking
     };
     
-    // Inverted index for fast text search
-    std::unordered_map<std::string, std::vector<IndexEntry>> inverted_index_;
+    // Keep original tokens as well as normalized postings for case-sensitive search.
+    using PostingIndex = std::unordered_map<std::string, std::vector<IndexEntry>>;
+    PostingIndex inverted_index_;
+    PostingIndex case_sensitive_index_;
     
     // Trie for autocomplete
     struct TrieNode {
