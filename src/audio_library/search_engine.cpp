@@ -50,6 +50,12 @@ void SearchEngine::remove_track(size_t id) {
             ++it;
         }
     }
+
+    // Suggestions must contain only terms still used by an indexed track.
+    trie_root_ = std::make_unique<TrieNode>();
+    for (const auto& [term, entries] : inverted_index_) {
+        add_to_trie(term);
+    }
 }
 
 void SearchEngine::clear_index() {

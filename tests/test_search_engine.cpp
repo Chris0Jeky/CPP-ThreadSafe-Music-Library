@@ -196,3 +196,26 @@ TEST_CASE("SearchEngine removal", "[search_engine]") {
     results = engine.search("keep", options);
     REQUIRE(results.size() == 1);
 }
+
+TEST_CASE("SearchEngine suggestions reflect track removal", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Paradise", "Shared Artist", 200),
+        std::make_shared<Track>("Paranoid", "Shared Artist", 180)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    REQUIRE(engine.get_suggestions("para").size() == 2);
+    engine.remove_track(0);
+
+    REQUIRE(engine.get_suggestions("parad").empty());
+    REQUIRE(engine.get_suggestions("para") == std::vector<std::string>{"paranoid"});
+    REQUIRE(engine.get_suggestions("shar") == std::vector<std::string>{"shared"});
+    REQUIRE(engine.search("shared").size() == 1);
+
+    engine.remove_track(1);
+    REQUIRE(engine.get_suggestions("para").empty());
+    REQUIRE(engine.get_suggestions("shar").empty());
+    REQUIRE(engine.get_indexed_terms_count() == 0);
+}
