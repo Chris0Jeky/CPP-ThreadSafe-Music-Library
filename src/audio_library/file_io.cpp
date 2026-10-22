@@ -74,6 +74,8 @@ std::optional<std::string> csv_record(std::ifstream& file, const FileIO::ImportO
 
 std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
                                      const ImportOptions& options) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) import_failure(options, "Not a regular file: " + path.string());
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
     std::vector<Track> tracks;
@@ -155,6 +157,8 @@ bool FileIO::export_csv(const std::filesystem::path& path,
 
 std::vector<Track> FileIO::import_json(const std::filesystem::path& path,
                                       const ImportOptions& options) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) import_failure(options, "Not a regular file: " + path.string());
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
     std::string content;
@@ -193,33 +197,41 @@ std::vector<Track> FileIO::import_json(const std::filesystem::path& path,
 bool FileIO::export_json(const std::filesystem::path& path,
                         const std::vector<Track>& tracks,
                         const ExportOptions& options) {
+    // Serialize first: to_json() throws on invalid UTF-8, and a throw must not
+    // leave a truncated file behind or escape a bool-returning export.
+    std::ostringstream out;
+    try {
+        out << "[";
+        if (options.pretty_print) out << "\n";
+
+        size_t count = 0;
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            if (options.pretty_print) out << "  ";
+
+            out << tracks[i].to_json();
+
+            if (i < tracks.size() - 1) {
+                out << ",";
+            }
+
+            if (options.pretty_print) out << "\n";
+
+            ++count;
+            if (options.progress_callback && count % 100 == 0) {
+                options.progress_callback(count, tracks.size());
+            }
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+
     std::ofstream file(path);
-    
+
     if (!file.is_open()) {
         return false;
     }
-    
-    file << "[";
-    if (options.pretty_print) file << "\n";
-    
-    size_t count = 0;
-    for (size_t i = 0; i < tracks.size(); ++i) {
-        if (options.pretty_print) file << "  ";
-        
-        file << tracks[i].to_json();
-        
-        if (i < tracks.size() - 1) {
-            file << ",";
-        }
-        
-        if (options.pretty_print) file << "\n";
-        
-        ++count;
-        if (options.progress_callback && count % 100 == 0) {
-            options.progress_callback(count, tracks.size());
-        }
-    }
-    
+
+    file << out.str();
     file << "]";
     if (options.pretty_print) file << "\n";
     

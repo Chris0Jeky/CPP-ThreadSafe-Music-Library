@@ -225,3 +225,15 @@ TEST_CASE("CSV does not discard a malformed first record as a header", "[regress
     options.skip_invalid_lines = false;
     REQUIRE_THROWS(FileIO::import_csv(fixture.path, options));
 }
+
+TEST_CASE("JSON export of invalid UTF-8 fails without writing a file", "[regression][unicode]") {
+    ImportFixture fixture;
+    std::vector<Track> tracks{Track("Caf\xE9", "Artist", 180)};
+    REQUIRE_FALSE(FileIO::export_json(fixture.path, tracks));
+    REQUIRE_FALSE(std::filesystem::exists(fixture.path));
+}
+
+TEST_CASE("Imports reject a directory path", "[regression][file_io]") {
+    REQUIRE_THROWS(FileIO::import_csv("."));
+    REQUIRE_THROWS(FileIO::import_json("."));
+}
