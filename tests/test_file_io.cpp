@@ -199,8 +199,7 @@ TEST_CASE("FileIO error handling", "[file_io]") {
     SECTION("Import from non-existent file") {
         fs::path non_existent = fs::temp_directory_path() / "does_not_exist.csv";
         
-        auto tracks = FileIO::import_csv(non_existent);
-        REQUIRE(tracks.empty());
+        REQUIRE_THROWS_AS(FileIO::import_csv(non_existent), std::runtime_error);
     }
     
     SECTION("Export to invalid path") {
