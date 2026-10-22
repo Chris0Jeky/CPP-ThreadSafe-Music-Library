@@ -52,6 +52,15 @@ int main() {
     for (const auto& track : results) {
         std::cout << "  " << track->title() << " (" << track->format_duration() << ")\n";
     }
+
+    // Query handles are immutable. Edit a copy and replace the expected version.
+    if (!results.empty()) {
+        Track edited = *results.front();
+        edited.increment_play_count();
+        if (!library.update_track(results.front(), std::move(edited))) {
+            std::cerr << "Track changed or the replacement duplicates another track.\n";
+        }
+    }
     
     // Get statistics
     std::cout << "\nLibrary Statistics:\n";

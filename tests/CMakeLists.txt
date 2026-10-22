@@ -6,6 +6,7 @@ add_executable(audio_library_tests
     test_main.cpp
     test_track.cpp
     test_music_library.cpp
+    test_thread_safety.cpp
     test_search_engine.cpp
     test_file_io.cpp
     test_import_regressions.cpp
