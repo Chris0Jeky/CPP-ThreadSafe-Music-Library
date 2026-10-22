@@ -46,6 +46,24 @@ bool MusicLibrary::add_track(TrackPtr track) {
     return add_track(*track);
 }
 
+bool MusicLibrary::update_track(const TrackPtr& expected, Track replacement) {
+    std::unique_lock lock(mutex_);
+    auto it = std::find(tracks_.begin(), tracks_.end(), expected);
+    if (it == tracks_.end()) return false;
+
+    const auto duplicate = std::find_if(tracks_.begin(), tracks_.end(),
+        [&](const TrackPtr& track) {
+            return track != expected && track->title() == replacement.title()
+                && track->artist() == replacement.artist();
+        });
+    if (duplicate != tracks_.end()) return false;
+
+    // Replacing the object preserves previously returned snapshots.
+    *it = std::make_shared<Track>(std::move(replacement));
+    rebuild_indexes();
+    return true;
+}
+
 bool MusicLibrary::remove_track(const std::string& title, const std::string& artist) {
     std::unique_lock lock(mutex_);
     
@@ -197,30 +215,23 @@ std::vector<MusicLibrary::TrackPtr> MusicLibrary::search(const std::string& quer
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::search_advanced(
     const std::string& query, const TrackFilter& filter) const {
     
-    std::shared_lock lock(mutex_);
-    
-    auto search_results = search_engine_->search(query);
-    std::vector<TrackPtr> results;
-    
-    for (const auto& [track_ptr, score] : search_results) {
-        if (!filter || filter(*track_ptr)) {
-            results.push_back(track_ptr);
-        }
+    auto results = search(query);
+    if (filter) {
+        results.erase(std::remove_if(results.begin(), results.end(),
+            [&filter](const TrackPtr& track) { return !filter(*track); }), results.end());
     }
-    
     return results;
 }
 
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::get_all_tracks() const {
     std::shared_lock lock(mutex_);
-    return tracks_;
+    return {tracks_.begin(), tracks_.end()};
 }
 
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::get_tracks_sorted(
     const TrackComparator& comparator) const {
     
-    std::shared_lock lock(mutex_);
-    std::vector<TrackPtr> sorted_tracks = tracks_;
+    auto sorted_tracks = get_all_tracks();
     
     std::sort(sorted_tracks.begin(), sorted_tracks.end(),
         [&comparator](const TrackPtr& a, const TrackPtr& b) {
@@ -272,10 +283,10 @@ std::vector<std::string> MusicLibrary::get_all_genres() const {
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::filter_tracks(const TrackFilter& filter) const {
     if (!filter) return get_all_tracks();
     
-    std::shared_lock lock(mutex_);
+    auto snapshot = get_all_tracks();
     std::vector<TrackPtr> results;
     
-    for (const auto& track : tracks_) {
+    for (const auto& track : snapshot) {
         if (track && filter(*track)) {
             results.push_back(track);
         }
@@ -422,9 +433,9 @@ bool MusicLibrary::export_to_json(const std::string& filename) const {
 }
 
 void MusicLibrary::for_each_track(const std::function<void(const Track&)>& func) const {
-    std::shared_lock lock(mutex_);
+    auto snapshot = get_all_tracks();
     
-    for (const auto& track : tracks_) {
+    for (const auto& track : snapshot) {
         if (track) {
             func(*track);
         }

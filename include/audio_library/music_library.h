@@ -16,7 +16,7 @@ class SearchEngine;
 
 class MusicLibrary {
 public:
-    using TrackPtr = std::shared_ptr<Track>;
+    using TrackPtr = std::shared_ptr<const Track>;
     using TrackFilter = std::function<bool(const Track&)>;
     using TrackComparator = std::function<bool(const Track&, const Track&)>;
     
@@ -37,11 +37,17 @@ public:
     // Track management
     bool add_track(Track track);
     bool add_track(TrackPtr track);
+    // Replace only if expected is still current; false for stale/foreign handles
+    // or a replacement duplicating another track's title and artist.
+    bool update_track(const TrackPtr& expected, Track replacement);
     bool remove_track(const std::string& title, const std::string& artist);
     bool remove_tracks_by_title(const std::string& title);
     bool remove_tracks_by_artist(const std::string& artist);
     void clear();
     
+    // Queries return immutable handles that remain valid across updates/removals.
+    // Callbacks run without the library lock, on a snapshot taken before callbacks
+    // begin. They may reenter/mutate the library; those changes do not alter the snapshot.
     // Search operations
     [[nodiscard]] std::vector<TrackPtr> find_by_title(const std::string& title) const;
     [[nodiscard]] std::vector<TrackPtr> find_by_artist(const std::string& artist) const;
@@ -83,7 +89,9 @@ public:
 private:
     // Internal data structures
     mutable std::shared_mutex mutex_;
-    std::vector<TrackPtr> tracks_;
+    // Mutable pointer type for SearchEngine/FileIO compatibility only. Stored
+    // objects are never mutated in place or exposed through mutable handles.
+    std::vector<std::shared_ptr<Track>> tracks_;
     
     // Indexes for fast lookup
     std::unordered_multimap<std::string, size_t> title_index_;
