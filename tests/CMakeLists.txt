@@ -19,6 +19,11 @@ target_link_libraries(audio_library_tests
 # Add tests
 add_test(NAME audio_library_tests COMMAND audio_library_tests)
 
+# Keep the allocation override out of the regular (including concurrent) tests.
+add_executable(music_library_exception_tests test_music_library_exceptions.cpp)
+target_link_libraries(music_library_exception_tests PRIVATE audio_library)
+add_test(NAME music_library_exception_tests COMMAND music_library_exception_tests)
+
 # Python's standard-library JSON parser supplies an independent interoperability oracle.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
