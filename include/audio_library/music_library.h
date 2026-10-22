@@ -70,7 +70,8 @@ public:
     [[nodiscard]] bool empty() const;
     [[nodiscard]] Statistics get_statistics() const;
     
-    // Import/Export
+    // Import/Export. Imports return false on open/read/parse/validation failure;
+    // input validation completes before any tracks are added. Duplicates are ignored.
     bool import_from_csv(const std::string& filename);
     bool export_to_csv(const std::string& filename) const;
     bool import_from_json(const std::string& filename);
