@@ -86,6 +86,7 @@ private:
     size_t levenshtein_distance(const std::string& s1, const std::string& s2) const;
     
     void add_to_trie(const std::string& word);
+    void remove_from_trie(const std::string& word);
     void add_to_inverted_index(const std::string& term, size_t track_id, 
                               const std::string& field, double weight);
     
