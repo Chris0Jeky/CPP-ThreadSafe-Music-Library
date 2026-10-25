@@ -42,6 +42,8 @@ void SearchEngine::remove_track(size_t id) {
                 [id](const IndexEntry& entry) { return entry.track_id == id; }),
                 entries.end());
             if (entries.empty()) {
+                // Autocomplete follows normalized postings, not individual case variants.
+                if (index == &inverted_index_) remove_from_trie(it->first);
                 it = index->erase(it);
             } else {
                 ++it;
@@ -283,6 +285,27 @@ void SearchEngine::add_to_trie(const std::string& word) {
     
     current->is_end_of_word = true;
     current->suggestions.insert(word);
+}
+
+void SearchEngine::remove_from_trie(const std::string& word) {
+    TrieNode* current = trie_root_.get();
+    std::vector<std::pair<TrieNode*, char>> path;
+    path.reserve(word.size());
+    for (char c : word) {
+        auto child = current->children.find(c);
+        if (child == current->children.end()) return;
+        path.emplace_back(current, c);
+        current = child->second.get();
+    }
+
+    current->is_end_of_word = false;
+    current->suggestions.erase(word);
+    // Keep shared prefixes and longer words; prune only the now-unused suffix.
+    for (auto it = path.rbegin(); it != path.rend(); ++it) {
+        auto child = it->first->children.find(it->second);
+        if (child->second->is_end_of_word || !child->second->children.empty()) break;
+        it->first->children.erase(child);
+    }
 }
 
 void SearchEngine::add_to_inverted_index(const std::string& term, size_t track_id,

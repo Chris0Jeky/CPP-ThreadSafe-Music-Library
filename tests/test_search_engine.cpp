@@ -3,6 +3,8 @@
 #include "audio_library/track.h"
 #include <algorithm>
 #include <cctype>
+#include <numeric>
+#include <random>
 
 using namespace audio_library;
 
@@ -203,6 +205,72 @@ TEST_CASE("SearchEngine removal", "[search_engine]") {
     REQUIRE(results.size() == 1);
 }
 
+TEST_CASE("SearchEngine suggestions reflect track removal", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Paradise", "Shared Artist", 200),
+        std::make_shared<Track>("Paranoid", "Shared Artist", 180)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    REQUIRE(engine.get_suggestions("para").size() == 2);
+    engine.remove_track(0);
+
+    REQUIRE(engine.get_suggestions("parad").empty());
+    REQUIRE(engine.get_suggestions("para") == std::vector<std::string>{"paranoid"});
+    REQUIRE(engine.get_suggestions("shar") == std::vector<std::string>{"shared"});
+    REQUIRE(engine.search("shared").size() == 1);
+
+    engine.remove_track(1);
+    REQUIRE(engine.get_suggestions("para").empty());
+    REQUIRE(engine.get_suggestions("shar").empty());
+    REQUIRE(engine.get_indexed_terms_count() == 0);
+}
+
+TEST_CASE("SearchEngine removal preserves prefix words and extensions", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Art", "Shared Shared", 200),
+        std::make_shared<Track>("Artist Artisan", "Shared", 180)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    SECTION("Remove prefix while retaining its extensions") {
+        engine.remove_track(0);
+        auto suggestions = engine.get_suggestions("art");
+        std::sort(suggestions.begin(), suggestions.end());
+        REQUIRE(suggestions == std::vector<std::string>{"artisan", "artist"});
+    }
+    SECTION("Remove extensions while retaining their prefix") {
+        engine.remove_track(1);
+        REQUIRE(engine.get_suggestions("art") == std::vector<std::string>{"art"});
+    }
+    REQUIRE(engine.get_suggestions("shared") == std::vector<std::string>{"shared"});
+}
+
+TEST_CASE("SearchEngine removal is idempotent and permits reindexing", "[search_engine]") {
+    SearchEngine engine;
+    std::vector<std::shared_ptr<Track>> tracks{
+        std::make_shared<Track>("Art", "Artist", 200)
+    };
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    engine.remove_track(0);
+    engine.remove_track(0);
+    engine.remove_track(999);
+    REQUIRE(engine.get_suggestions("art").empty());
+    REQUIRE(engine.get_indexed_terms_count() == 0);
+
+    engine.index_track(0, *tracks[0]);
+    REQUIRE(engine.get_suggestions("artist") == std::vector<std::string>{"artist"});
+    REQUIRE(engine.search("art").size() == 1);
+    engine.remove_track(999);
+    REQUIRE(engine.get_suggestions("artist") == std::vector<std::string>{"artist"});
+}
+
 TEST_CASE("SearchEngine preserves token case in every field and mode", "[search_engine][case_sensitive]") {
     using Mode = SearchEngine::SearchMode;
     struct FieldCase {
@@ -323,6 +391,15 @@ TEST_CASE("SearchEngine maintains both case indexes", "[search_engine][case_sens
         REQUIRE(engine.search("queen", options).size() == 1);
         REQUIRE(engine.search("QUEEN").size() == 1);
         REQUIRE(engine.get_indexed_tracks_count() == 1);
+        REQUIRE(engine.get_suggestions("QUE") == std::vector<std::string>{"queen"});
+
+        engine.remove_track(1);
+        REQUIRE(engine.search("Queen", options).empty());
+        REQUIRE(engine.search("queen", options).empty());
+        REQUIRE(engine.search("QUEEN").empty());
+        REQUIRE(engine.get_suggestions("QUE").empty());
+        REQUIRE(engine.get_indexed_terms_count() == 0);
+        REQUIRE(engine.get_indexed_tracks_count() == 0);
     }
     SECTION("Clear") {
         engine.clear_index();
@@ -340,4 +417,91 @@ TEST_CASE("SearchEngine maintains both case indexes", "[search_engine][case_sens
         REQUIRE(engine.search("Updated", options).size() == 1);
         REQUIRE(engine.search("updated").size() == 1);
     }
+}
+
+TEST_CASE("SearchEngine shuffled removals match rebuilt indexes", "[search_engine][removal]") {
+    using Mode = SearchEngine::SearchMode;
+    std::vector<SearchEngine::TrackPtr> tracks;
+    for (size_t id = 0; id < 60; ++id) {
+        auto track = std::make_shared<Track>(
+            std::string(id % 3 == 0 ? "Art " : id % 3 == 1 ? "Artist " : "Artisan ")
+                + "Tune" + std::to_string(id),
+            id % 2 == 0 ? "Shared Shared" : "shared", 200);
+        track->set_album("Archive Art");
+        track->set_genre("Rock");
+        tracks.push_back(track);
+    }
+    SearchEngine engine;
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    std::vector<size_t> removal_order(tracks.size());
+    std::iota(removal_order.begin(), removal_order.end(), size_t{0});
+    std::mt19937 random(15);
+    std::shuffle(removal_order.begin(), removal_order.end(), random);
+    for (const auto id : removal_order) {
+        CAPTURE(id);
+        engine.remove_track(id);
+        engine.remove_track(id);
+        engine.remove_track(tracks.size());
+
+        // Preserve IDs while rebuilding an independent reference from the survivors.
+        auto survivors = tracks;
+        for (const auto removed : removal_order) {
+            survivors[removed].reset();
+            if (removed == id) break;
+        }
+        SearchEngine rebuilt;
+        rebuilt.set_tracks(&tracks);
+        rebuilt.rebuild_index(survivors);
+        REQUIRE(engine.get_indexed_terms_count() == rebuilt.get_indexed_terms_count());
+        REQUIRE(engine.get_indexed_tracks_count() == rebuilt.get_indexed_tracks_count());
+
+        for (const auto* prefix : {"a", "ART", "s", "tune", "r"}) {
+            auto actual = engine.get_suggestions(prefix, 1000);
+            auto expected = rebuilt.get_suggestions(prefix, 1000);
+            std::sort(actual.begin(), actual.end());
+            std::sort(expected.begin(), expected.end());
+            REQUIRE(actual == expected);
+        }
+        for (auto mode : {Mode::EXACT, Mode::PREFIX, Mode::SUBSTRING, Mode::FUZZY, Mode::REGEX}) {
+            for (bool case_sensitive : {false, true}) {
+                SearchEngine::SearchOptions options;
+                options.mode = mode;
+                options.case_sensitive = case_sensitive;
+                for (const auto* query : {"Art", "art", "Shared", "shared", "Tune", "Rock"}) {
+                    CAPTURE(mode, case_sensitive, query);
+                    auto actual = engine.search(query, options);
+                    auto expected = rebuilt.search(query, options);
+                    const auto by_title = [](const auto& a, const auto& b) {
+                        return a.first->title() < b.first->title();
+                    };
+                    std::sort(actual.begin(), actual.end(), by_title);
+                    std::sort(expected.begin(), expected.end(), by_title);
+                    REQUIRE(actual.size() == expected.size());
+                    for (size_t i = 0; i < actual.size(); ++i) {
+                        REQUIRE(actual[i].first == expected[i].first);
+                        REQUIRE(actual[i].second == Approx(expected[i].second));
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("SearchEngine prunes long tokens iteratively", "[search_engine][removal]") {
+    const std::string prefix(8192, 'a');
+    std::vector<SearchEngine::TrackPtr> tracks{
+        std::make_shared<Track>(prefix, "Shared", 200),
+        std::make_shared<Track>(prefix + "b", "Shared", 200)
+    };
+    SearchEngine engine;
+    engine.set_tracks(&tracks);
+    engine.rebuild_index(tracks);
+
+    engine.remove_track(0);
+    REQUIRE(engine.get_suggestions(prefix) == std::vector<std::string>{prefix + "b"});
+    engine.remove_track(1);
+    REQUIRE(engine.get_suggestions("a").empty());
+    REQUIRE(engine.get_indexed_terms_count() == 0);
 }
