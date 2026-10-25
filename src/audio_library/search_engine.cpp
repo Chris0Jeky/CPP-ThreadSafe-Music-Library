@@ -20,7 +20,7 @@ void SearchEngine::index_track(size_t id, const Track& track) {
         auto tokens = tokenize(text);
         for (const auto& token : tokens) {
             add_to_inverted_index(token, id, field, weight);
-            add_to_trie(token);
+            add_to_trie(normalize(token, false));
         }
     };
     
@@ -35,26 +35,26 @@ void SearchEngine::index_track(size_t id, const Track& track) {
 }
 
 void SearchEngine::remove_track(size_t id) {
-    // Remove from inverted index
-    for (auto& [term, entries] : inverted_index_) {
-        entries.erase(std::remove_if(entries.begin(), entries.end(),
-            [id](const IndexEntry& entry) { return entry.track_id == id; }),
-            entries.end());
-    }
-    
-    // Clean up empty entries
-    for (auto it = inverted_index_.begin(); it != inverted_index_.end(); ) {
-        if (it->second.empty()) {
-            remove_from_trie(it->first);
-            it = inverted_index_.erase(it);
-        } else {
-            ++it;
+    for (auto* index : {&inverted_index_, &case_sensitive_index_}) {
+        for (auto it = index->begin(); it != index->end(); ) {
+            auto& entries = it->second;
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                [id](const IndexEntry& entry) { return entry.track_id == id; }),
+                entries.end());
+            if (entries.empty()) {
+                // Autocomplete follows normalized postings, not individual case variants.
+                if (index == &inverted_index_) remove_from_trie(it->first);
+                it = index->erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 }
 
 void SearchEngine::clear_index() {
     inverted_index_.clear();
+    case_sensitive_index_.clear();
     trie_root_ = std::make_unique<TrieNode>();
 }
 
@@ -188,7 +188,7 @@ std::vector<std::string> SearchEngine::tokenize(const std::string& text) const {
         }
         
         if (!token.empty()) {
-            tokens.push_back(normalize(token, false));
+            tokens.push_back(token);
         }
     }
     
@@ -211,27 +211,25 @@ double SearchEngine::calculate_relevance(const std::string& query, const std::st
         return 0.0;
     }
     
-    std::string lower_query = normalize(query, false);
-    std::string lower_text = normalize(text, false);
-    
+    // Query and indexed token already have the selected case normalization.
     // Exact match
-    if (lower_text == lower_query) {
+    if (text == query) {
         return 1.0;
     }
     
     // Prefix match
-    if (lower_text.find(lower_query) == 0) {
+    if (text.find(query) == 0) {
         return 0.8;
     }
     
     // Contains match
-    if (lower_text.find(lower_query) != std::string::npos) {
+    if (text.find(query) != std::string::npos) {
         return 0.6;
     }
     
     // Fuzzy match using edit distance
-    size_t distance = levenshtein_distance(lower_query, lower_text);
-    size_t max_len = std::max(lower_query.length(), lower_text.length());
+    size_t distance = levenshtein_distance(query, text);
+    size_t max_len = std::max(query.length(), text.length());
     
     if (max_len > 0) {
         double similarity = 1.0 - (static_cast<double>(distance) / max_len);
@@ -312,14 +310,16 @@ void SearchEngine::remove_from_trie(const std::string& word) {
 
 void SearchEngine::add_to_inverted_index(const std::string& term, size_t track_id,
                                        const std::string& field, double weight) {
-    inverted_index_[term].push_back({track_id, field, weight});
+    inverted_index_[normalize(term, false)].push_back({track_id, field, weight});
+    case_sensitive_index_[term].push_back({track_id, field, weight});
 }
 
 // Private helper methods for different search modes
 void SearchEngine::search_exact(const std::string& query, const SearchOptions& options,
                                std::unordered_map<size_t, double>& track_scores) const {
-    auto it = inverted_index_.find(query);
-    if (it != inverted_index_.end()) {
+    const auto& index = options.case_sensitive ? case_sensitive_index_ : inverted_index_;
+    auto it = index.find(query);
+    if (it != index.end()) {
         for (const auto& entry : it->second) {
             if (should_search_field(entry.field, options)) {
                 track_scores[entry.track_id] += entry.weight;
@@ -330,7 +330,8 @@ void SearchEngine::search_exact(const std::string& query, const SearchOptions& o
 
 void SearchEngine::search_prefix(const std::string& query, const SearchOptions& options,
                                 std::unordered_map<size_t, double>& track_scores) const {
-    for (const auto& [term, entries] : inverted_index_) {
+    const auto& index = options.case_sensitive ? case_sensitive_index_ : inverted_index_;
+    for (const auto& [term, entries] : index) {
         if (term.find(query) == 0) { // Prefix match
             for (const auto& entry : entries) {
                 if (should_search_field(entry.field, options)) {
@@ -343,7 +344,8 @@ void SearchEngine::search_prefix(const std::string& query, const SearchOptions& 
 
 void SearchEngine::search_substring(const std::string& query, const SearchOptions& options,
                                    std::unordered_map<size_t, double>& track_scores) const {
-    for (const auto& [term, entries] : inverted_index_) {
+    const auto& index = options.case_sensitive ? case_sensitive_index_ : inverted_index_;
+    for (const auto& [term, entries] : index) {
         if (term.find(query) != std::string::npos) { // Substring match
             for (const auto& entry : entries) {
                 if (should_search_field(entry.field, options)) {
@@ -357,7 +359,8 @@ void SearchEngine::search_substring(const std::string& query, const SearchOption
 
 void SearchEngine::search_fuzzy(const std::string& query, const SearchOptions& options,
                                std::unordered_map<size_t, double>& track_scores) const {
-    for (const auto& [term, entries] : inverted_index_) {
+    const auto& index = options.case_sensitive ? case_sensitive_index_ : inverted_index_;
+    for (const auto& [term, entries] : index) {
         double relevance = calculate_relevance(query, term);
         if (relevance > 0) {
             for (const auto& entry : entries) {
@@ -375,7 +378,8 @@ void SearchEngine::search_regex(const std::string& pattern, const SearchOptions&
         std::regex regex_pattern(pattern, 
             options.case_sensitive ? std::regex::ECMAScript : std::regex::icase);
         
-        for (const auto& [term, entries] : inverted_index_) {
+        const auto& index = options.case_sensitive ? case_sensitive_index_ : inverted_index_;
+        for (const auto& [term, entries] : index) {
             if (std::regex_search(term, regex_pattern)) {
                 for (const auto& entry : entries) {
                     if (should_search_field(entry.field, options)) {

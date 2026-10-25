@@ -39,7 +39,7 @@ jobs:
         sudo apt-get install -y lcov
         
     - name: Configure CMake with coverage
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage"
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic"
       
     - name: Build
       run: cmake --build build --parallel

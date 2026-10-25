@@ -164,6 +164,27 @@ Bohemian Rhapsody,Queen,354,A Night at the Opera,Rock,1975,1543,5.0
 ]
 ```
 
+CSV imports preserve quoted commas, doubled quotes, and embedded LF/CR/CRLF.
+JSON uses UTF-8; Unicode escapes (including surrogate pairs) are decoded. Invalid
+UTF-8, malformed escapes, and malformed JSON documents are rejected.
+
+`FileIO::import_csv` and `import_json` throw `std::runtime_error` on open/read
+failures or resource limits, and invoke `error_callback` when supplied. CSV can
+skip invalid records with `skip_invalid_lines` (the default); set it to `false`
+to reject any invalid track. JSON syntax errors always fail the whole import;
+the same option controls skipping syntactically valid objects with invalid track
+data. Exceeding `max_errors` also fails instead of returning a partial result.
+Defaults cap input at 16 MiB and 100,000 records, and each CSV record at 1 MiB
+and 10,000 physical lines; `ImportOptions` exposes these limits. JSON nesting is
+capped at 64 levels. JSON export throws on invalid UTF-8 metadata.
+
+`MusicLibrary::import_from_csv` and `import_from_json` keep their `bool` API:
+they return `false` for open/read/parse/validation failures and add no tracks
+from invalid input. An empty CSV file or header-only CSV, and a JSON `[]`, are
+valid empty imports. A zero-byte JSON file is invalid. Successful imports ignore
+duplicates already in the library. These guarantees cover input validation;
+they do not provide rollback after an allocation failure while adding tracks.
+
 ## API Documentation
 
 ### Track Class
@@ -184,6 +205,7 @@ to_json()          // JSON format
 ```cpp
 // Track management
 add_track(track)
+update_track(expected_handle, replacement_track)
 remove_track(title, artist)
 remove_tracks_by_title(title)
 remove_tracks_by_artist(artist)
@@ -216,12 +238,45 @@ export_to_json(filename)
 get_statistics()
 ```
 
+### Track ownership and callbacks
+
+All `MusicLibrary` track queries return `std::vector<MusicLibrary::TrackPtr>`,
+where `TrackPtr` is `std::shared_ptr<const Track>`. Handles retain the track data
+from the query even after an update, removal, or `clear()`. Adding a track copies
+or moves its value into library-owned storage; adding a shared pointer copies its
+track, so later changes through the input pointer do not affect the library.
+
+To edit metadata, copy a queried track, use its setters, then call
+`update_track(expected_handle, replacement_track)`. This replaces the stored
+object and rebuilds all lookup and search indexes under the exclusive library
+lock. It returns `false` without changes if the handle is null, foreign, removed,
+or stale after another update, or if the replacement duplicates another track's
+title/artist pair. Requery and resolve concurrent edits before retrying. Updates
+replace the entire value, including title, artist, duration, and metadata.
+
+`for_each_track`, `filter_tracks`, `get_tracks_sorted`, and `search_advanced`
+capture immutable handles under the lock and release it before invoking user
+callbacks. Callbacks may read or mutate the library. Each operation uses its
+captured snapshot: callback changes do not change its remaining inputs or returned
+track values. Comparators must still provide a strict weak ordering. References
+passed to callbacks are valid during the call; retain a query handle or a copy
+to keep a track afterward. Caller-owned `Track` objects and callback state need
+their own synchronization if shared between threads.
+
+Code with explicit `std::shared_ptr<Track>` query results must migrate to
+`MusicLibrary::TrackPtr` (or `auto`); mutation through a query handle no longer
+compiles. Direct `FileIO` exports accept value vectors or mutable pointer vectors;
+copy queried tracks into `std::vector<Track>` when exporting query results.
+The optional `gui/` still has mutable pointer declarations and needs migration
+before building against this API; it is not part of the CMake library/CLI build.
+
 ## Performance
 
 - **O(1)** average case for exact searches
 - **O(n)** for fuzzy and regex searches
 - Thread-safe concurrent reads
 - Efficient memory usage with shared pointers
+- Track replacement updates rebuild indexes in O(n) work (plus indexed text)
 - Optimized string operations with string_view where applicable
 
 ## Testing
