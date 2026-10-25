@@ -27,16 +27,9 @@ bool MusicLibrary::add_track(Track track) {
         return false; // Duplicate found
     }
     
-    // Add track
-    auto track_ptr = std::make_shared<Track>(std::move(track));
-    size_t index = tracks_.size();
-    tracks_.push_back(track_ptr);
-    
-    // Update indexes
-    add_to_indexes(index, *track_ptr);
-    
-    // Update search engine
-    search_engine_->index_track(index, *track_ptr);
+    auto tracks = tracks_;
+    tracks.push_back(std::make_shared<Track>(std::move(track)));
+    replace_tracks(std::move(tracks));
     
     return true;
 }
@@ -460,19 +453,6 @@ void MusicLibrary::replace_tracks(std::vector<std::shared_ptr<Track>> tracks) {
     album_index_.swap(album_index);
     genre_index_.swap(genre_index);
     search_engine_.swap(search_engine);
-}
-
-void MusicLibrary::add_to_indexes(size_t index, const Track& track) {
-    title_index_.emplace(track.title(), index);
-    artist_index_.emplace(track.artist(), index);
-    
-    if (!track.album().empty()) {
-        album_index_.emplace(track.album(), index);
-    }
-    
-    if (!track.genre().empty()) {
-        genre_index_.emplace(track.genre(), index);
-    }
 }
 
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::get_tracks_by_indexes(

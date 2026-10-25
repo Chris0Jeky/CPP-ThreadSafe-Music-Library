@@ -35,6 +35,7 @@ public:
     ~MusicLibrary();
     
     // Track management
+    // Additions commit tracks and indexes together; exceptions leave the library unchanged.
     bool add_track(Track track);
     bool add_track(TrackPtr track);
     // Replace only if expected is still current; false for stale/foreign handles
@@ -104,7 +105,6 @@ private:
     
     // Helper methods
     void replace_tracks(std::vector<std::shared_ptr<Track>> tracks);
-    void add_to_indexes(size_t index, const Track& track);
     [[nodiscard]] std::vector<TrackPtr> get_tracks_by_indexes(const std::vector<size_t>& indexes) const;
 };
 

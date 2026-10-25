@@ -79,19 +79,27 @@ void verify_library(const MusicLibrary& library, const Tracks& expected, const T
     }
 }
 
-enum class Mutation { Update, Remove, RemoveTitle, RemoveArtist, Clear };
+enum class Mutation { Add, AddShared, Update, Remove, RemoveTitle, RemoveArtist, Clear };
 
-void exercise(Mutation mutation, const char* name) {
+void exercise(Mutation mutation, const char* name, bool initially_empty = false) {
     // Sweep every allocation site, including allocations late in trie rebuilding.
     // The first successful call also proves mutations still work after the change.
     for (std::ptrdiff_t fail_at = 0; fail_at < 10000; ++fail_at) {
         MusicLibrary library;
-        library.add_track(make_track("oldtitle", "oldartist", "oldalbum", "oldgenre"));
-        library.add_track(make_track("oldtitle", "otherartist", "otheralbum", "othergenre"));
-        library.add_track(make_track("othertitle", "oldartist", "otheralbum", "othergenre"));
-        library.add_track(make_track("survivortitle", "survivorartist", "survivoralbum", "survivorgenre"));
+        if (!initially_empty) {
+            library.add_track(make_track("oldtitle", "oldartist", "oldalbum", "oldgenre"));
+            library.add_track(make_track("oldtitle", "otherartist", "otheralbum", "othergenre"));
+            library.add_track(make_track("othertitle", "oldartist", "otheralbum", "othergenre"));
+            library.add_track(make_track("survivortitle", "survivorartist", "survivoralbum", "survivorgenre"));
+        }
         const auto before = library.get_all_tracks();
         Track replacement = make_track("newtitle", "newartist", "newalbum", "newgenre");
+        const bool adding = mutation == Mutation::Add || mutation == Mutation::AddShared;
+        if (adding) {
+            // Exceed small-string storage to exercise failures during token extraction too.
+            replacement = make_track("newtitlewithlongmetadata", "newartistwithlongmetadata",
+                                     "newalbumwithlongmetadata", "newgenrewithlongmetadata");
+        }
         auto probes = before;
         probes.push_back(std::make_shared<Track>(replacement));
         bool changed = false;
@@ -100,6 +108,12 @@ void exercise(Mutation mutation, const char* name) {
             FailAllocation failure(fail_at);
             try {
                 switch (mutation) {
+                case Mutation::Add:
+                    changed = library.add_track(std::move(replacement));
+                    break;
+                case Mutation::AddShared:
+                    changed = library.add_track(probes.back());
+                    break;
                 case Mutation::Update:
                     changed = library.update_track(before[0], std::move(replacement));
                     break;
@@ -123,12 +137,32 @@ void exercise(Mutation mutation, const char* name) {
         }
         if (failed) {
             verify_library(library, before, probes);
+            if (adding) {
+                require(library.add_track(probes.back()), "retry after failed addition rejected");
+                auto expected = before;
+                expected.push_back(library.get_all_tracks().back());
+                verify_library(library, expected, probes);
+                require(!library.add_track(probes.back()), "duplicate addition accepted after retry");
+            }
             continue;
         }
         require(changed, "mutation unexpectedly rejected");
         require(fail_at > 0, "allocation failure was never exercised");
         Tracks expected = before;
         switch (mutation) {
+        case Mutation::Add:
+        case Mutation::AddShared: {
+            const auto current = library.get_all_tracks().back();
+            require(current != probes.back(), "addition retained caller-owned storage");
+            require(current->title() == probes.back()->title()
+                    && current->artist() == probes.back()->artist()
+                    && current->album() == probes.back()->album()
+                    && current->genre() == probes.back()->genre(),
+                    "added metadata is incorrect");
+            expected.push_back(current);
+            require(!library.add_track(probes.back()), "duplicate addition accepted");
+            break;
+        }
         case Mutation::Update: {
             const auto current = library.get_all_tracks().at(0);
             require(current != before[0], "update mutated the original snapshot");
@@ -172,6 +206,10 @@ int main() {
     return 77;
 #else
     try {
+        exercise(Mutation::Add, "add_track");
+        exercise(Mutation::AddShared, "add_track(shared)");
+        exercise(Mutation::Add, "add_track(empty)", true);
+        exercise(Mutation::AddShared, "add_track(shared, empty)", true);
         exercise(Mutation::Update, "update_track");
         exercise(Mutation::Remove, "remove_track");
         exercise(Mutation::RemoveTitle, "remove_tracks_by_title");
