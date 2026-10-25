@@ -22,6 +22,112 @@ struct ImportFixture {
 };
 }
 
+TEST_CASE("CSV imports accept one leading UTF-8 BOM", "[regression][csv][bom]") {
+    ImportFixture fixture;
+    const auto csv = GENERATE(std::string("Title,Artist,Duration\r\nSong,Artist,180\r\n"),
+                              std::string("Song,Artist,180\n"),
+                              std::string("\"Song, live\",Artist,180\n"),
+                              std::string("\"Song\r\nlive\",Artist,180\r\n"));
+    const auto prefix = GENERATE(std::string(), std::string("\xEF\xBB\xBF"));
+    fixture.write(prefix + csv);
+    FileIO::ImportOptions options;
+    options.skip_invalid_lines = false;
+    size_t errors = 0;
+    options.error_callback = [&errors](const std::string&, size_t) { ++errors; };
+    const auto tracks = FileIO::import_csv(fixture.path, options);
+    REQUIRE(tracks.size() == 1);
+    const std::string title = csv.find("live") == std::string::npos ? "Song"
+        : (csv.find("Song,") != std::string::npos ? "Song, live" : "Song\r\nlive");
+    REQUIRE(tracks[0].title() == title);
+    REQUIRE(tracks[0].artist() == "Artist");
+    REQUIRE(tracks[0].duration_seconds() == 180);
+    REQUIRE(errors == 0);
+    MusicLibrary library;
+    REQUIRE(library.import_from_csv(fixture.path.string()));
+    REQUIRE(library.find_by_title(title).size() == 1);
+}
+
+TEST_CASE("JSON imports accept one leading UTF-8 BOM", "[regression][json][bom]") {
+    ImportFixture fixture;
+    const auto prefix = GENERATE(std::string(), std::string("\xEF\xBB\xBF"));
+    fixture.write(prefix + " \r\n" + R"([{"title":"Song","artist":"Artist","duration":180}])");
+    FileIO::ImportOptions options;
+    options.skip_invalid_lines = false;
+    size_t errors = 0;
+    options.error_callback = [&errors](const std::string&, size_t) { ++errors; };
+    const auto tracks = FileIO::import_json(fixture.path, options);
+    REQUIRE(tracks.size() == 1);
+    REQUIRE(tracks[0].title() == "Song");
+    REQUIRE(tracks[0].artist() == "Artist");
+    REQUIRE(tracks[0].duration_seconds() == 180);
+    REQUIRE(errors == 0);
+    MusicLibrary library;
+    REQUIRE(library.import_from_json(fixture.path.string()));
+    REQUIRE(library.find_by_title("Song").size() == 1);
+}
+
+TEST_CASE("Format detection accepts a leading UTF-8 BOM", "[regression][file_io][bom]") {
+    ImportFixture fixture;
+    const bool json = GENERATE(false, true);
+    const auto prefix = GENERATE(std::string(), std::string("\xEF\xBB\xBF"));
+    fixture.write(prefix + (json ? R"([{"title":"Song","artist":"Artist","duration":180}])"
+                                 : "Title,Artist,Duration\nSong,Artist,180\n"));
+    REQUIRE((json ? FileIO::validate_json_format(fixture.path) : FileIO::validate_csv_format(fixture.path)));
+    REQUIRE(FileIO::detect_file_format(fixture.path) == (json ? "json" : "csv"));
+}
+
+TEST_CASE("BOM bytes count toward import input limits", "[regression][file_io][bom]") {
+    ImportFixture fixture;
+    const bool json = GENERATE(false, true);
+    const std::string content = json ? "[]" : "Title,Artist,Duration\n";
+    const std::string input = "\xEF\xBB\xBF" + content;
+    fixture.write(input);
+    FileIO::ImportOptions options;
+    const auto import = [&] {
+        return json ? FileIO::import_json(fixture.path, options) : FileIO::import_csv(fixture.path, options);
+    };
+    options.max_input_bytes = input.size();
+    REQUIRE(import().empty());
+    options.max_input_bytes = input.size() - 1;
+    REQUIRE_THROWS_AS(import(), std::runtime_error);
+    options.max_input_bytes = 2;
+    REQUIRE_THROWS_AS(import(), std::runtime_error);
+}
+
+TEST_CASE("BOM-only inputs follow empty import rules", "[regression][file_io][bom]") {
+    ImportFixture fixture;
+    const auto prefix = GENERATE(std::string(), std::string("\xEF\xBB\xBF"));
+    fixture.write(prefix);
+    FileIO::ImportOptions options;
+    options.skip_invalid_lines = false;
+    REQUIRE(FileIO::import_csv(fixture.path, options).empty());
+    REQUIRE_THROWS_AS(FileIO::import_json(fixture.path, options), std::runtime_error);
+    REQUIRE_FALSE(FileIO::validate_csv_format(fixture.path));
+    REQUIRE_FALSE(FileIO::validate_json_format(fixture.path));
+}
+
+TEST_CASE("Imports preserve UTF-8 BOM bytes inside track metadata", "[regression][unicode][bom]") {
+    ImportFixture fixture;
+    const std::string bom = "\xEF\xBB\xBF";
+    fixture.write(bom + "\"" + bom + "Song\",Artist,180\n");
+    const auto csv = FileIO::import_csv(fixture.path);
+    REQUIRE(csv.size() == 1);
+    REQUIRE(csv[0].title() == bom + "Song");
+    fixture.write(bom + "[{\"title\":\"" + bom + "Song\",\"artist\":\"Artist\",\"duration\":180}]");
+    const auto json = FileIO::import_json(fixture.path);
+    REQUIRE(json.size() == 1);
+    REQUIRE(json[0].title() == bom + "Song");
+}
+
+TEST_CASE("JSON rejects misplaced repeated and incomplete BOMs", "[regression][json][bom]") {
+    ImportFixture fixture;
+    const auto prefix = GENERATE(std::string(" \xEF\xBB\xBF"),
+                                 std::string("\xEF\xBB\xBF\xEF\xBB\xBF"),
+                                 std::string("\xEF"), std::string("\xEF\xBB"));
+    fixture.write(prefix + "[]");
+    REQUIRE_THROWS_AS(FileIO::import_json(fixture.path), std::runtime_error);
+}
+
 TEST_CASE("CSV logical records preserve multiline metadata", "[regression][csv]") {
     ImportFixture fixture;
     Track track("Title\nwith, \"quotes\"", "Artist\r\nsecond line", 180);
