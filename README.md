@@ -245,6 +245,8 @@ where `TrackPtr` is `std::shared_ptr<const Track>`. Handles retain the track dat
 from the query even after an update, removal, or `clear()`. Adding a track copies
 or moves its value into library-owned storage; adding a shared pointer copies its
 track, so later changes through the input pointer do not affect the library.
+Both `add_track` overloads leave stored tracks and all indexes unchanged if an
+exception occurs, so a failed addition can be retried.
 
 To edit metadata, copy a queried track, use its setters, then call
 `update_track(expected_handle, replacement_track)`. This replaces the stored
@@ -276,7 +278,7 @@ before building against this API; it is not part of the CMake library/CLI build.
 - **O(n)** for fuzzy and regex searches
 - Thread-safe concurrent reads
 - Efficient memory usage with shared pointers
-- Track replacement updates rebuild indexes in O(n) work (plus indexed text)
+- Track additions and replacement updates rebuild indexes in O(n) work (plus indexed text)
 - Optimized string operations with string_view where applicable
 
 ## Testing

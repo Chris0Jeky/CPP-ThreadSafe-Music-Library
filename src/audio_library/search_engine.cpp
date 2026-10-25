@@ -176,6 +176,8 @@ size_t SearchEngine::get_indexed_tracks_count() const {
 std::vector<std::string> SearchEngine::tokenize(const std::string& text) const {
     std::vector<std::string> tokens;
     std::stringstream ss(text);
+    // Do not commit an incomplete index when token extraction runs out of memory.
+    ss.exceptions(std::ios::badbit);
     std::string token;
     
     while (ss >> token) {
