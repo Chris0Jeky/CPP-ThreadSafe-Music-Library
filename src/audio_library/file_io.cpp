@@ -137,6 +137,7 @@ bool FileIO::export_csv(const std::filesystem::path& path,
         }
     }
     
+    file.close();
     return file.good();
 }
 
@@ -235,6 +236,7 @@ bool FileIO::export_json(const std::filesystem::path& path,
     file << "]";
     if (options.pretty_print) file << "\n";
     
+    file.close();
     return file.good();
 }
 
@@ -313,6 +315,7 @@ bool FileIO::export_playlist(const std::filesystem::path& path,
         file << track.artist() << " - " << track.title() << ".mp3\n";
     }
     
+    file.close();
     return file.good();
 }
 
