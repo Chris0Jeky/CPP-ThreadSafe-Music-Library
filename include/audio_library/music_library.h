@@ -103,9 +103,8 @@ private:
     std::unique_ptr<SearchEngine> search_engine_;
     
     // Helper methods
-    void rebuild_indexes();
+    void replace_tracks(std::vector<std::shared_ptr<Track>> tracks);
     void add_to_indexes(size_t index, const Track& track);
-    void remove_from_indexes(size_t index, const Track& track);
     [[nodiscard]] std::vector<TrackPtr> get_tracks_by_indexes(const std::vector<size_t>& indexes) const;
 };
 

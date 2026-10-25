@@ -59,8 +59,9 @@ bool MusicLibrary::update_track(const TrackPtr& expected, Track replacement) {
     if (duplicate != tracks_.end()) return false;
 
     // Replacing the object preserves previously returned snapshots.
-    *it = std::make_shared<Track>(std::move(replacement));
-    rebuild_indexes();
+    auto tracks = tracks_;
+    tracks[std::distance(tracks_.begin(), it)] = std::make_shared<Track>(std::move(replacement));
+    replace_tracks(std::move(tracks));
     return true;
 }
 
@@ -76,37 +77,28 @@ bool MusicLibrary::remove_track(const std::string& title, const std::string& art
         return false;
     }
     
-    size_t index = std::distance(tracks_.begin(), it);
-    
-    // Remove from indexes
-    if (*it) {
-        remove_from_indexes(index, **it);
-        search_engine_->remove_track(index);
-    }
-    
-    // Remove track
-    tracks_.erase(it);
-    
-    // Rebuild indexes due to shifted positions
-    rebuild_indexes();
-    
+    auto tracks = tracks_;
+    tracks.erase(tracks.begin() + std::distance(tracks_.begin(), it));
+    replace_tracks(std::move(tracks));
+
     return true;
 }
 
 bool MusicLibrary::remove_tracks_by_title(const std::string& title) {
     std::unique_lock lock(mutex_);
     
-    auto new_end = std::remove_if(tracks_.begin(), tracks_.end(),
+    auto tracks = tracks_;
+    auto new_end = std::remove_if(tracks.begin(), tracks.end(),
         [&title](const TrackPtr& t) {
             return t && t->title() == title;
         });
     
-    if (new_end == tracks_.end()) {
+    if (new_end == tracks.end()) {
         return false;
     }
     
-    tracks_.erase(new_end, tracks_.end());
-    rebuild_indexes();
+    tracks.erase(new_end, tracks.end());
+    replace_tracks(std::move(tracks));
     
     return true;
 }
@@ -114,29 +106,25 @@ bool MusicLibrary::remove_tracks_by_title(const std::string& title) {
 bool MusicLibrary::remove_tracks_by_artist(const std::string& artist) {
     std::unique_lock lock(mutex_);
     
-    auto new_end = std::remove_if(tracks_.begin(), tracks_.end(),
+    auto tracks = tracks_;
+    auto new_end = std::remove_if(tracks.begin(), tracks.end(),
         [&artist](const TrackPtr& t) {
             return t && t->artist() == artist;
         });
     
-    if (new_end == tracks_.end()) {
+    if (new_end == tracks.end()) {
         return false;
     }
     
-    tracks_.erase(new_end, tracks_.end());
-    rebuild_indexes();
+    tracks.erase(new_end, tracks.end());
+    replace_tracks(std::move(tracks));
     
     return true;
 }
 
 void MusicLibrary::clear() {
     std::unique_lock lock(mutex_);
-    tracks_.clear();
-    title_index_.clear();
-    artist_index_.clear();
-    album_index_.clear();
-    genre_index_.clear();
-    search_engine_->clear_index();
+    replace_tracks({});
 }
 
 std::vector<MusicLibrary::TrackPtr> MusicLibrary::find_by_title(const std::string& title) const {
@@ -442,19 +430,36 @@ void MusicLibrary::for_each_track(const std::function<void(const Track&)>& func)
     }
 }
 
-void MusicLibrary::rebuild_indexes() {
-    title_index_.clear();
-    artist_index_.clear();
-    album_index_.clear();
-    genre_index_.clear();
-    search_engine_->clear_index();
-    
-    for (size_t i = 0; i < tracks_.size(); ++i) {
-        if (tracks_[i]) {
-            add_to_indexes(i, *tracks_[i]);
-            search_engine_->index_track(i, *tracks_[i]);
+void MusicLibrary::replace_tracks(std::vector<std::shared_ptr<Track>> tracks) {
+    std::unordered_multimap<std::string, size_t> title_index, artist_index, album_index, genre_index;
+    auto search_engine = std::make_unique<SearchEngine>();
+    search_engine->set_tracks(&tracks_);
+
+    // All allocations, including the search trie, complete before changing live state.
+    for (size_t i = 0; i < tracks.size(); ++i) {
+        if (tracks[i]) {
+            const auto& track = *tracks[i];
+            title_index.emplace(track.title(), i);
+            artist_index.emplace(track.artist(), i);
+            if (!track.album().empty()) album_index.emplace(track.album(), i);
+            if (!track.genre().empty()) genre_index.emplace(track.genre(), i);
+            search_engine->index_track(i, track);
         }
     }
+
+    static_assert(noexcept(tracks_.swap(tracks))
+                  && noexcept(title_index_.swap(title_index))
+                  && noexcept(artist_index_.swap(artist_index))
+                  && noexcept(album_index_.swap(album_index))
+                  && noexcept(genre_index_.swap(genre_index))
+                  && noexcept(search_engine_.swap(search_engine)),
+                  "Committing replacement tracks and indexes must not throw");
+    tracks_.swap(tracks);
+    title_index_.swap(title_index);
+    artist_index_.swap(artist_index);
+    album_index_.swap(album_index);
+    genre_index_.swap(genre_index);
+    search_engine_.swap(search_engine);
 }
 
 void MusicLibrary::add_to_indexes(size_t index, const Track& track) {
@@ -467,52 +472,6 @@ void MusicLibrary::add_to_indexes(size_t index, const Track& track) {
     
     if (!track.genre().empty()) {
         genre_index_.emplace(track.genre(), index);
-    }
-}
-
-void MusicLibrary::remove_from_indexes(size_t index, const Track& track) {
-    // Remove from title index
-    auto title_range = title_index_.equal_range(track.title());
-    for (auto it = title_range.first; it != title_range.second; ) {
-        if (it->second == index) {
-            it = title_index_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    
-    // Remove from artist index
-    auto artist_range = artist_index_.equal_range(track.artist());
-    for (auto it = artist_range.first; it != artist_range.second; ) {
-        if (it->second == index) {
-            it = artist_index_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    
-    // Remove from album index
-    if (!track.album().empty()) {
-        auto album_range = album_index_.equal_range(track.album());
-        for (auto it = album_range.first; it != album_range.second; ) {
-            if (it->second == index) {
-                it = album_index_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-    
-    // Remove from genre index
-    if (!track.genre().empty()) {
-        auto genre_range = genre_index_.equal_range(track.genre());
-        for (auto it = genre_range.first; it != genre_range.second; ) {
-            if (it->second == index) {
-                it = genre_index_.erase(it);
-            } else {
-                ++it;
-            }
-        }
     }
 }
 
