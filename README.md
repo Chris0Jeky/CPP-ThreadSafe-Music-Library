@@ -165,6 +165,8 @@ Bohemian Rhapsody,Queen,354,A Night at the Opera,Rock,1975,1543,5.0
 ```
 
 CSV imports preserve quoted commas, doubled quotes, and embedded LF/CR/CRLF.
+CSV and JSON imports and format detection accept a single leading UTF-8 BOM.
+Its three bytes count toward the input byte limit; BOM bytes inside metadata are preserved.
 JSON uses UTF-8; Unicode escapes (including surrogate pairs) are decoded. Invalid
 UTF-8, malformed escapes, and malformed JSON documents are rejected.
 

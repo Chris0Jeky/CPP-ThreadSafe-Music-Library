@@ -8,10 +8,23 @@
 #include "csv_parser.h"
 #include "json_parser.h"
 #include <stdexcept>
+#include <string_view>
 
 namespace audio_library {
 
 namespace {
+size_t skip_utf8_bom(std::ifstream& file) {
+    char prefix[3];
+    file.read(prefix, sizeof(prefix));
+    if (file.gcount() == 3 && std::string_view(prefix, 3) == "\xEF\xBB\xBF") return 3;
+    // Preserve read errors; a short/non-BOM prefix must be parsed from byte zero.
+    if (!file.bad() && (file.good() || file.eof())) {
+        file.clear();
+        file.seekg(0);
+    }
+    return 0;
+}
+
 [[noreturn]] void import_failure(const FileIO::ImportOptions& options,
                                  const std::string& message, size_t line = 0) {
     if (options.error_callback) options.error_callback(message, line);
@@ -79,7 +92,8 @@ std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
     std::vector<Track> tracks;
-    size_t line = 1, bytes = 0, errors = 0, records = 0;
+    size_t line = 1, bytes = skip_utf8_bom(file), errors = 0, records = 0;
+    if (bytes > options.max_input_bytes) import_failure(options, "CSV input byte limit exceeded", line);
     bool first = true;
     while (true) {
         const auto start_line = line;
@@ -162,11 +176,13 @@ std::vector<Track> FileIO::import_json(const std::filesystem::path& path,
     if (!std::filesystem::is_regular_file(path, ec)) import_failure(options, "Not a regular file: " + path.string());
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
+    const auto bom_bytes = skip_utf8_bom(file);
+    if (bom_bytes > options.max_input_bytes) import_failure(options, "JSON input byte limit exceeded");
     std::string content;
     char buffer[8192];
     while (file.read(buffer, sizeof(buffer)) || file.gcount() != 0) {
         const auto count = static_cast<size_t>(file.gcount());
-        if (count > options.max_input_bytes - content.size())
+        if (count > options.max_input_bytes - bom_bytes - content.size())
             import_failure(options, "JSON input byte limit exceeded");
         content.append(buffer, count);
     }
@@ -325,6 +341,7 @@ bool FileIO::validate_csv_format(const std::filesystem::path& path) {
     if (!file.is_open()) {
         return false;
     }
+    skip_utf8_bom(file);
     
     std::string line;
     if (!std::getline(file, line)) {
@@ -383,6 +400,7 @@ bool FileIO::validate_json_format(const std::filesystem::path& path) {
     if (!file.is_open()) {
         return false;
     }
+    skip_utf8_bom(file);
     
     // Simple JSON validation - check for array brackets and at least one object
     char ch;
