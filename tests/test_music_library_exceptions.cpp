@@ -165,6 +165,12 @@ void exercise(Mutation mutation, const char* name) {
 }
 
 int main() {
+#if defined(_MSC_VER) && defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+    // MSVC iterator debugging allocates a container proxy inside noexcept moves (std::string, Track), so an
+    // injected bad_alloc there calls std::terminate rather than testing the library. Release legs cover it.
+    std::cout << "skipped: MSVC iterator debugging allocates in noexcept moves\n";
+    return 77;
+#else
     try {
         exercise(Mutation::Update, "update_track");
         exercise(Mutation::Remove, "remove_track");
@@ -175,4 +181,5 @@ int main() {
         std::cerr << error.what() << '\n';
         return 1;
     }
+#endif
 }

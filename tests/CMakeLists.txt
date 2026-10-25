@@ -23,6 +23,7 @@ add_test(NAME audio_library_tests COMMAND audio_library_tests)
 add_executable(music_library_exception_tests test_music_library_exceptions.cpp)
 target_link_libraries(music_library_exception_tests PRIVATE audio_library)
 add_test(NAME music_library_exception_tests COMMAND music_library_exception_tests)
+set_tests_properties(music_library_exception_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 # Python's standard-library JSON parser supplies an independent interoperability oracle.
 find_package(Python3 COMPONENTS Interpreter QUIET)
