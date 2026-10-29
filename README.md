@@ -40,36 +40,42 @@ A modern C++17 music library management system with advanced search capabilities
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/SWECW2-AudioLibrary.git
-cd SWECW2-AudioLibrary
+git clone https://github.com/Chris0Jeky/CPP-ThreadSafe-Music-Library.git
+cd CPP-ThreadSafe-Music-Library
 
-# Create build directory
-mkdir build && cd build
+# Create and enter the build directory
+mkdir build
+cd build
 
-# Configure with CMake
-cmake ..
+# Configure a Release build
+cmake .. -DCMAKE_BUILD_TYPE=Release
 
-# Build the project
-make -j$(nproc)
+# Build with the selected CMake generator
+cmake --build . --config Release --parallel
 
-# Run tests
-make test
-
-# Install (optional)
-sudo make install
+# Run all registered tests
+ctest -C Release --output-on-failure
 ```
 
+`CMAKE_BUILD_TYPE` selects Release for single-configuration generators;
+`--config Release` selects it for multi-configuration generators such as Visual
+Studio and Xcode. For optional installation, first configure
+`CMAKE_INSTALL_PREFIX` to choose the destination, then run
+`cmake --build . --config Release --target install` from `build/`.
+
 ### Build Options
+Run these commands from `build/`:
+
 ```bash
 # Disable tests
 cmake -DBUILD_TESTS=OFF ..
 
-# Enable benchmarks
-cmake -DBUILD_BENCHMARKS=ON ..
-
 # Release build with optimizations
 cmake -DCMAKE_BUILD_TYPE=Release ..
 ```
+
+`BUILD_BENCHMARKS` is declared in CMake, but its `benchmarks/` directory is not
+included in this checkout. Keep that option OFF.
 
 ## Usage
 
@@ -120,7 +126,7 @@ std::cout << "Total tracks: " << stats.total_tracks << "\n";
 ## Project Structure
 
 ```
-SWECW2-AudioLibrary/
+CPP-ThreadSafe-Music-Library/
 ├── include/audio_library/     # Public headers
 │   ├── track.h               # Track class definition
 │   ├── music_library.h       # Main library interface
@@ -135,7 +141,6 @@ SWECW2-AudioLibrary/
 │   └── main.cpp              # CLI application
 ├── tests/                    # Unit tests
 ├── examples/                 # Example programs
-├── benchmarks/              # Performance benchmarks
 ├── data/                    # Sample data files
 └── CMakeLists.txt          # Build configuration
 ```
