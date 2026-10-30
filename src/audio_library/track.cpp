@@ -3,7 +3,10 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
-#include <regex>
+#include "csv_parser.h"
+#include "json_parser.h"
+#include <cmath>
+#include <stdexcept>
 
 namespace audio_library {
 
@@ -40,12 +43,14 @@ std::string Track::format_duration() const {
 bool Track::matches_query(const std::string& query) const {
     // Convert query to lowercase for case-insensitive search
     std::string lower_query = query;
-    std::transform(lower_query.begin(), lower_query.end(), lower_query.begin(), ::tolower);
+    std::transform(lower_query.begin(), lower_query.end(), lower_query.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
     // Check each field
     auto contains_query = [&lower_query](const std::string& field) {
         std::string lower_field = field;
-        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(), ::tolower);
+        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return lower_field.find(lower_query) != std::string::npos;
     };
     
@@ -96,8 +101,9 @@ std::string Track::to_csv() const {
 
 std::string Track::to_json() const {
     auto escape_json = [](const std::string& str) {
+        if (!detail::valid_utf8(str)) throw std::runtime_error("Invalid UTF-8 in track metadata");
         std::string escaped;
-        for (char c : str) {
+        for (unsigned char c : str) {
             switch (c) {
                 case '"': escaped += "\\\""; break;
                 case '\\': escaped += "\\\\"; break;
@@ -107,10 +113,10 @@ std::string Track::to_json() const {
                 case '\r': escaped += "\\r"; break;
                 case '\t': escaped += "\\t"; break;
                 default:
-                    if (c >= 0x20 && c <= 0x7E) {
-                        escaped += c;
+                    if (c >= 0x20) {
+                        escaped += static_cast<char>(c);
                     } else {
-                        // Unicode escape for non-ASCII characters
+                        // JSON requires escaping control characters.
                         std::ostringstream oss;
                         oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') 
                             << static_cast<int>(static_cast<unsigned char>(c));
@@ -168,54 +174,21 @@ bool Track::operator<(const Track& other) const noexcept {
 }
 
 std::optional<Track> Track::from_csv_line(const std::string& line) {
-    // Simple CSV parser (handles quoted fields with embedded commas)
-    std::vector<std::string> fields;
-    std::string current_field;
-    bool in_quotes = false;
-    bool quote_escaped = false;
-    
-    for (size_t i = 0; i < line.length(); ++i) {
-        char c = line[i];
-        
-        if (quote_escaped) {
-            if (c == '"') {
-                current_field += '"';
-            } else {
-                // Not an escaped quote, end the quoted field
-                in_quotes = false;
-                --i; // Process this character again
-            }
-            quote_escaped = false;
-        } else if (in_quotes) {
-            if (c == '"') {
-                if (i + 1 < line.length() && line[i + 1] == '"') {
-                    quote_escaped = true;
-                } else {
-                    in_quotes = false;
-                }
-            } else {
-                current_field += c;
-            }
-        } else {
-            if (c == '"' && current_field.empty()) {
-                in_quotes = true;
-            } else if (c == ',') {
-                fields.push_back(current_field);
-                current_field.clear();
-            } else {
-                current_field += c;
-            }
-        }
-    }
-    fields.push_back(current_field);
-    
+    const auto fields = detail::csv_fields(line);
+
     // Parse fields (minimum required: title, artist, duration)
-    if (fields.size() < 3) {
+    if (fields.size() < 3 || fields.size() > 8) {
         return std::nullopt;
     }
     
     try {
-        Track track(fields[0], fields[1], std::stoi(fields[2]));
+        auto integer = [](const std::string& value) {
+            size_t used = 0;
+            const auto result = std::stoi(value, &used);
+            if (used != value.size()) throw std::runtime_error("Invalid integer");
+            return result;
+        };
+        Track track(fields[0], fields[1], integer(fields[2]));
         
         // Optional fields
         if (fields.size() > 3 && !fields[3].empty()) {
@@ -225,13 +198,19 @@ std::optional<Track> Track::from_csv_line(const std::string& line) {
             track.set_genre(fields[4]);
         }
         if (fields.size() > 5 && !fields[5].empty()) {
-            track.set_year(std::stoi(fields[5]));
+            track.set_year(integer(fields[5]));
         }
         if (fields.size() > 6 && !fields[6].empty()) {
-            track.play_count_ = std::stoull(fields[6]);
+            size_t used = 0;
+            if (fields[6].find('-') != std::string::npos) return std::nullopt;
+            track.play_count_ = std::stoull(fields[6], &used);
+            if (used != fields[6].size()) return std::nullopt;
         }
         if (fields.size() > 7 && !fields[7].empty()) {
-            track.set_rating(std::stod(fields[7]));
+            size_t used = 0;
+            const auto rating = std::stod(fields[7], &used);
+            if (used != fields[7].size() || !std::isfinite(rating) || rating < 0 || rating > 5) return std::nullopt;
+            track.set_rating(rating);
         }
         
         return track;
@@ -241,74 +220,41 @@ std::optional<Track> Track::from_csv_line(const std::string& line) {
 }
 
 std::optional<Track> Track::from_json(const std::string& json) {
-    // Simple JSON parser for track objects
-    static const std::regex field_regex("\"(\\w+)\"\\s*:\\s*(\"([^\"\\\\]|\\\\.)*\"|\\d+(\\.\\d+)?)");
-    
-    std::unordered_map<std::string, std::string> fields;
-    
-    auto matches_begin = std::sregex_iterator(json.begin(), json.end(), field_regex);
-    auto matches_end = std::sregex_iterator();
-    
-    for (auto it = matches_begin; it != matches_end; ++it) {
-        std::smatch match = *it;
-        std::string key = match[1];
-        std::string value = match[2];
-        
-        // Remove quotes from string values
-        if (value.front() == '"' && value.back() == '"') {
-            value = value.substr(1, value.length() - 2);
-            
-            // Unescape JSON string
-            std::string unescaped;
-            for (size_t i = 0; i < value.length(); ++i) {
-                if (value[i] == '\\' && i + 1 < value.length()) {
-                    switch (value[i + 1]) {
-                        case '"': unescaped += '"'; ++i; break;
-                        case '\\': unescaped += '\\'; ++i; break;
-                        case 'b': unescaped += '\b'; ++i; break;
-                        case 'f': unescaped += '\f'; ++i; break;
-                        case 'n': unescaped += '\n'; ++i; break;
-                        case 'r': unescaped += '\r'; ++i; break;
-                        case 't': unescaped += '\t'; ++i; break;
-                        default: unescaped += value[i];
-                    }
-                } else {
-                    unescaped += value[i];
-                }
-            }
-            value = unescaped;
-        }
-        
-        fields[key] = value;
-    }
-    
-    // Check required fields
-    if (fields.find("title") == fields.end() || 
-        fields.find("artist") == fields.end() || 
-        fields.find("duration") == fields.end()) {
-        return std::nullopt;
-    }
-    
     try {
-        Track track(fields["title"], fields["artist"], std::stoi(fields["duration"]));
-        
-        // Optional fields
-        if (fields.find("album") != fields.end()) {
-            track.set_album(fields["album"]);
+        detail::JsonReader reader(json);
+        const auto fields = reader.object();
+        reader.finish();
+        using Kind = detail::JsonReader::Field::Kind;
+        auto get = [&fields](const std::string& key, Kind kind) -> const std::string& {
+            const auto& field = fields.at(key);
+            if (field.kind != kind) throw std::runtime_error("Wrong JSON field type");
+            return field.text;
+        };
+        auto integer = [&get](const std::string& key) {
+            const auto& text = get(key, Kind::Number);
+            size_t used = 0;
+            const auto result = std::stoi(text, &used);
+            if (used != text.size()) throw std::runtime_error("Expected an integer");
+            return result;
+        };
+        Track track(get("title", Kind::String), get("artist", Kind::String), integer("duration"));
+        if (fields.count("album")) track.set_album(get("album", Kind::String));
+        if (fields.count("genre")) track.set_genre(get("genre", Kind::String));
+        if (fields.count("year")) track.set_year(integer("year"));
+        if (fields.count("play_count")) {
+            const auto& text = get("play_count", Kind::Number);
+            size_t used = 0;
+            if (text.front() == '-') return std::nullopt;
+            track.play_count_ = std::stoull(text, &used);
+            if (used != text.size()) return std::nullopt;
         }
-        if (fields.find("genre") != fields.end()) {
-            track.set_genre(fields["genre"]);
+        if (fields.count("rating")) {
+            const auto& text = get("rating", Kind::Number);
+            size_t used = 0;
+            const auto rating = std::stod(text, &used);
+            if (used != text.size() || !std::isfinite(rating) || rating < 0 || rating > 5) return std::nullopt;
+            track.set_rating(rating);
         }
-        if (fields.find("year") != fields.end()) {
-            track.set_year(std::stoi(fields["year"]));
-        }
-        if (fields.find("play_count") != fields.end()) {
-            track.play_count_ = std::stoull(fields["play_count"]);
-        }
-        if (fields.find("rating") != fields.end()) {
-            track.set_rating(std::stod(fields["rating"]));
-        }
-        
         return track;
     } catch (const std::exception&) {
         return std::nullopt;

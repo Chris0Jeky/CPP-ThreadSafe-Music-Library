@@ -2,90 +2,126 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <iomanip>
+#include "csv_parser.h"
+#include "json_parser.h"
+#include <stdexcept>
+#include <string_view>
 
 namespace audio_library {
 
-std::vector<Track> FileIO::import_csv(const std::filesystem::path& path, 
-                                     const ImportOptions& options) {
-    std::vector<Track> tracks;
-    std::ifstream file(path);
-    
-    if (!file.is_open()) {
-        if (options.error_callback) {
-            options.error_callback("Cannot open file: " + path.string(), 0);
-        }
-        return tracks;
+namespace {
+size_t skip_utf8_bom(std::ifstream& file) {
+    char prefix[3];
+    file.read(prefix, sizeof(prefix));
+    if (file.gcount() == 3 && std::string_view(prefix, 3) == "\xEF\xBB\xBF") return 3;
+    // Preserve read errors; a short/non-BOM prefix must be parsed from byte zero.
+    if (!file.bad() && (file.good() || file.eof())) {
+        file.clear();
+        file.seekg(0);
     }
-    
-    std::string line;
-    size_t line_number = 0;
-    size_t error_count = 0;
-    
-    // Check if first line is a header
-    if (std::getline(file, line)) {
-        ++line_number;
-        
-        // Simple heuristic: if the third field is not a number, it's likely a header
-        auto fields = split_csv_line(line);
-        if (fields.size() >= 3) {
-            try {
-                std::stoi(fields[2]);
-                // It's a data line, process it
-                file.seekg(0);
-                line_number = 0;
-            } catch (...) {
-                // It's a header, skip it
+    return 0;
+}
+
+[[noreturn]] void import_failure(const FileIO::ImportOptions& options,
+                                 const std::string& message, size_t line = 0) {
+    if (options.error_callback) options.error_callback(message, line);
+    throw std::runtime_error(message);
+}
+
+bool csv_header(const std::vector<std::string>& fields) {
+    if (fields.size() < 3) return false;
+    const char* names[] = {"title", "artist", "duration"};
+    for (size_t i = 0; i < 3; ++i) {
+        auto name = fields[i];
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (name != names[i]) return false;
+    }
+    return true;
+}
+
+std::optional<std::string> csv_record(std::ifstream& file, const FileIO::ImportOptions& options,
+                                      size_t& line, size_t& bytes) {
+    std::string record;
+    auto state = detail::CsvState::Start;
+    size_t lines = 1;
+    bool previous_cr = false;
+    char c;
+    while (file.get(c)) {
+        if (++bytes > options.max_input_bytes) import_failure(options, "CSV input byte limit exceeded", line);
+        const bool quoted = state == detail::CsvState::Quoted;
+        if (c == '\r' || c == '\n') {
+            if (c == '\r' || !previous_cr) {
+                ++line;
+                if (quoted && ++lines > options.max_record_lines)
+                    import_failure(options, "CSV record line limit exceeded", line);
             }
-        }
-    }
-    
-    // Process data lines
-    while (std::getline(file, line)) {
-        ++line_number;
-        
-        if (options.progress_callback && line_number % 100 == 0) {
-            options.progress_callback(line_number, 0); // Total unknown for streaming
-        }
-        
-        auto track_opt = Track::from_csv_line(line);
-        
-        if (track_opt) {
-            if (!options.validate_data || validate_track_data(*track_opt)) {
-                tracks.push_back(std::move(*track_opt));
-            } else {
-                ++error_count;
-                if (options.error_callback) {
-                    options.error_callback("Invalid track data at line " + 
-                                         std::to_string(line_number), line_number);
+            if (!quoted) {
+                if (c == '\r' && file.peek() == '\n') {
+                    file.get(c);
+                    if (++bytes > options.max_input_bytes) import_failure(options, "CSV input byte limit exceeded", line);
                 }
+                return record;
             }
-        } else if (!options.skip_invalid_lines) {
-            ++error_count;
-            if (options.error_callback) {
-                options.error_callback("Failed to parse line " + 
-                                     std::to_string(line_number) + ": " + line, line_number);
-            }
-        } else {
-            ++error_count;
         }
-        
-        if (error_count >= options.max_errors) {
-            if (options.error_callback) {
-                options.error_callback("Too many errors, stopping import", line_number);
-            }
-            break;
-        }
+        previous_cr = c == '\r';
+        if (record.size() >= options.max_record_bytes || lines > options.max_record_lines)
+            import_failure(options, "CSV record size limit exceeded", line);
+        record += c;
+        if (quoted) {
+            if (c == '"') state = detail::CsvState::Closed;
+        } else if (c == '"' && (state == detail::CsvState::Start || state == detail::CsvState::Closed)) {
+            state = detail::CsvState::Quoted;
+        } else if (c == ',') state = detail::CsvState::Start;
+        else state = detail::CsvState::Plain;
     }
-    
+    if (file.bad() || !file.eof()) import_failure(options, "Cannot read CSV input", line);
+    if (state == detail::CsvState::Quoted) import_failure(options, "Unterminated quoted CSV field", line);
+    if (record.empty()) return std::nullopt;
+    return record;
+}
+} // namespace
+
+std::vector<Track> FileIO::import_csv(const std::filesystem::path& path,
+                                     const ImportOptions& options) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) import_failure(options, "Not a regular file: " + path.string());
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
+    std::vector<Track> tracks;
+    size_t line = 1, bytes = skip_utf8_bom(file), errors = 0, records = 0;
+    if (bytes > options.max_input_bytes) import_failure(options, "CSV input byte limit exceeded", line);
+    bool first = true;
+    while (true) {
+        const auto start_line = line;
+        const auto record = csv_record(file, options, line, bytes);
+        if (!record) break;
+        if (first) {
+            first = false;
+            if (csv_header(detail::csv_fields(*record))) continue;
+        }
+        if (++records > options.max_tracks) import_failure(options, "CSV record count limit exceeded", start_line);
+        auto track = Track::from_csv_line(*record);
+        if (track && (!options.validate_data || validate_track_data(*track))) {
+            tracks.push_back(std::move(*track));
+        } else {
+            const auto message = "Invalid CSV track at line " + std::to_string(start_line);
+            if (!options.skip_invalid_lines) import_failure(options, message, start_line);
+            if (options.error_callback) options.error_callback(message, start_line);
+            if (++errors >= options.max_errors) import_failure(options, "CSV error limit exceeded", start_line);
+        }
+        if (options.progress_callback && records % 100 == 0) options.progress_callback(records, 0);
+    }
     return tracks;
 }
 
 bool FileIO::export_csv(const std::filesystem::path& path, 
                        const std::vector<Track>& tracks,
                        const ExportOptions& options) {
-    std::ofstream file(path);
+    std::ofstream file(path, std::ios::binary);
     
     if (!file.is_open()) {
         return false;
@@ -115,6 +151,7 @@ bool FileIO::export_csv(const std::filesystem::path& path,
         }
     }
     
+    file.close();
     return file.good();
 }
 
@@ -135,144 +172,87 @@ bool FileIO::export_csv(const std::filesystem::path& path,
 
 std::vector<Track> FileIO::import_json(const std::filesystem::path& path,
                                       const ImportOptions& options) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) import_failure(options, "Not a regular file: " + path.string());
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) import_failure(options, "Cannot open file: " + path.string());
+    const auto bom_bytes = skip_utf8_bom(file);
+    if (bom_bytes > options.max_input_bytes) import_failure(options, "JSON input byte limit exceeded");
+    std::string content;
+    char buffer[8192];
+    while (file.read(buffer, sizeof(buffer)) || file.gcount() != 0) {
+        const auto count = static_cast<size_t>(file.gcount());
+        if (count > options.max_input_bytes - bom_bytes - content.size())
+            import_failure(options, "JSON input byte limit exceeded");
+        content.append(buffer, count);
+    }
+    if (file.bad() || !file.eof()) import_failure(options, "Cannot read JSON input");
+    std::vector<std::string_view> objects;
+    try {
+        detail::JsonReader reader(content);
+        objects = reader.array_objects(options.max_tracks);
+    } catch (const std::runtime_error& error) {
+        import_failure(options, error.what());
+    }
     std::vector<Track> tracks;
-    std::ifstream file(path);
-    
-    if (!file.is_open()) {
-        if (options.error_callback) {
-            options.error_callback("Cannot open file: " + path.string(), 0);
-        }
-        return tracks;
-    }
-    
-    std::string content((std::istreambuf_iterator<char>(file)),
-                       std::istreambuf_iterator<char>());
-    
-    // Simple JSON array parser
-    size_t pos = content.find('[');
-    if (pos == std::string::npos) {
-        if (options.error_callback) {
-            options.error_callback("Invalid JSON format: no array found", 0);
-        }
-        return tracks;
-    }
-    
-    size_t end = content.rfind(']');
-    if (end == std::string::npos || end <= pos) {
-        if (options.error_callback) {
-            options.error_callback("Invalid JSON format: array not closed", 0);
-        }
-        return tracks;
-    }
-    
-    // Extract objects from array
-    size_t obj_start = pos + 1;
-    size_t error_count = 0;
-    size_t track_count = 0;
-    
-    while (obj_start < end) {
-        // Skip whitespace
-        while (obj_start < end && std::isspace(content[obj_start])) {
-            ++obj_start;
-        }
-        
-        if (obj_start >= end) break;
-        
-        // Find object boundaries
-        if (content[obj_start] == '{') {
-            int brace_count = 1;
-            size_t obj_end = obj_start + 1;
-            
-            while (obj_end < end && brace_count > 0) {
-                if (content[obj_end] == '{') ++brace_count;
-                else if (content[obj_end] == '}') --brace_count;
-                ++obj_end;
-            }
-            
-            if (brace_count == 0) {
-                std::string json_obj = content.substr(obj_start, obj_end - obj_start);
-                auto track_opt = Track::from_json(json_obj);
-                
-                if (track_opt) {
-                    if (!options.validate_data || validate_track_data(*track_opt)) {
-                        tracks.push_back(std::move(*track_opt));
-                        ++track_count;
-                        
-                        if (options.progress_callback && track_count % 100 == 0) {
-                            options.progress_callback(track_count, 0);
-                        }
-                    } else {
-                        ++error_count;
-                        if (options.error_callback) {
-                            options.error_callback("Invalid track data in JSON", track_count);
-                        }
-                    }
-                } else if (!options.skip_invalid_lines) {
-                    ++error_count;
-                    if (options.error_callback) {
-                        options.error_callback("Failed to parse JSON object", track_count);
-                    }
-                } else {
-                    ++error_count;
-                }
-                
-                if (error_count >= options.max_errors) {
-                    if (options.error_callback) {
-                        options.error_callback("Too many errors, stopping import", track_count);
-                    }
-                    break;
-                }
-                
-                // Move to next object
-                obj_start = obj_end;
-                while (obj_start < end && (std::isspace(content[obj_start]) || 
-                                         content[obj_start] == ',')) {
-                    ++obj_start;
-                }
-            } else {
-                break; // Malformed JSON
-            }
+    size_t errors = 0, count = 0;
+    for (const auto object : objects) {
+        ++count;
+        const auto track = Track::from_json(std::string(object));
+        if (track && (!options.validate_data || validate_track_data(*track))) {
+            tracks.push_back(*track);
         } else {
-            break; // Not an object
+            if (!options.skip_invalid_lines) import_failure(options, "Invalid JSON track", count);
+            if (options.error_callback) options.error_callback("Invalid JSON track", count);
+            if (++errors >= options.max_errors) import_failure(options, "JSON error limit exceeded", count);
         }
+        if (options.progress_callback && count % 100 == 0) options.progress_callback(count, objects.size());
     }
-    
     return tracks;
 }
 
 bool FileIO::export_json(const std::filesystem::path& path,
                         const std::vector<Track>& tracks,
                         const ExportOptions& options) {
+    // Serialize first: to_json() throws on invalid UTF-8, and a throw must not
+    // leave a truncated file behind or escape a bool-returning export.
+    std::ostringstream out;
+    try {
+        out << "[";
+        if (options.pretty_print) out << "\n";
+
+        size_t count = 0;
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            if (options.pretty_print) out << "  ";
+
+            out << tracks[i].to_json();
+
+            if (i < tracks.size() - 1) {
+                out << ",";
+            }
+
+            if (options.pretty_print) out << "\n";
+
+            ++count;
+            if (options.progress_callback && count % 100 == 0) {
+                options.progress_callback(count, tracks.size());
+            }
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+
     std::ofstream file(path);
-    
+
     if (!file.is_open()) {
         return false;
     }
-    
-    file << "[";
-    if (options.pretty_print) file << "\n";
-    
-    size_t count = 0;
-    for (size_t i = 0; i < tracks.size(); ++i) {
-        if (options.pretty_print) file << "  ";
-        
-        file << tracks[i].to_json();
-        
-        if (i < tracks.size() - 1) {
-            file << ",";
-        }
-        
-        if (options.pretty_print) file << "\n";
-        
-        ++count;
-        if (options.progress_callback && count % 100 == 0) {
-            options.progress_callback(count, tracks.size());
-        }
-    }
-    
+
+    file << out.str();
     file << "]";
     if (options.pretty_print) file << "\n";
     
+    file.close();
     return file.good();
 }
 
@@ -351,6 +331,7 @@ bool FileIO::export_playlist(const std::filesystem::path& path,
         file << track.artist() << " - " << track.title() << ".mp3\n";
     }
     
+    file.close();
     return file.good();
 }
 
@@ -360,6 +341,7 @@ bool FileIO::validate_csv_format(const std::filesystem::path& path) {
     if (!file.is_open()) {
         return false;
     }
+    skip_utf8_bom(file);
     
     std::string line;
     if (!std::getline(file, line)) {
@@ -389,12 +371,14 @@ bool FileIO::validate_csv_format(const std::filesystem::path& path) {
     
     for (size_t i = 0; i < std::min(fields.size(), size_t(3)); ++i) {
         std::string lower_field = fields[i];
-        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(), ::tolower);
+        std::transform(lower_field.begin(), lower_field.end(), lower_field.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         
         bool found = false;
         for (const auto& header : valid_headers) {
             std::string lower_header = header;
-            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(), ::tolower);
+            std::transform(lower_header.begin(), lower_header.end(), lower_header.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             
             if (lower_field.find(lower_header) != std::string::npos) {
                 found = true;
@@ -416,6 +400,7 @@ bool FileIO::validate_json_format(const std::filesystem::path& path) {
     if (!file.is_open()) {
         return false;
     }
+    skip_utf8_bom(file);
     
     // Simple JSON validation - check for array brackets and at least one object
     char ch;
@@ -440,9 +425,10 @@ bool FileIO::validate_json_format(const std::filesystem::path& path) {
 std::optional<std::string> FileIO::detect_file_format(const std::filesystem::path& path) {
     // Check extension first
     auto ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
-    if (ext == ".csv" || ext == ".txt") {
+    if (ext == ".csv") {
         if (validate_csv_format(path)) {
             return "csv";
         }
@@ -467,46 +453,7 @@ std::optional<std::string> FileIO::detect_file_format(const std::filesystem::pat
 }
 
 std::vector<std::string> FileIO::split_csv_line(const std::string& line) {
-    std::vector<std::string> fields;
-    std::string current_field;
-    bool in_quotes = false;
-    bool quote_escaped = false;
-    
-    for (size_t i = 0; i < line.length(); ++i) {
-        char c = line[i];
-        
-        if (quote_escaped) {
-            if (c == '"') {
-                current_field += '"';
-            } else {
-                in_quotes = false;
-                --i;
-            }
-            quote_escaped = false;
-        } else if (in_quotes) {
-            if (c == '"') {
-                if (i + 1 < line.length() && line[i + 1] == '"') {
-                    quote_escaped = true;
-                } else {
-                    in_quotes = false;
-                }
-            } else {
-                current_field += c;
-            }
-        } else {
-            if (c == '"' && current_field.empty()) {
-                in_quotes = true;
-            } else if (c == ',') {
-                fields.push_back(current_field);
-                current_field.clear();
-            } else {
-                current_field += c;
-            }
-        }
-    }
-    
-    fields.push_back(current_field);
-    return fields;
+    return detail::csv_fields(line);
 }
 
 std::string FileIO::escape_csv_field(const std::string& field) {

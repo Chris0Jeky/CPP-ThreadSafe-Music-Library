@@ -178,7 +178,7 @@ TEST_CASE("Track comparison", "[track]") {
     
     SECTION("Ordering") {
         REQUIRE(track1 < track4); // Artist 1 < Artist 2
-        REQUIRE(track3 < track1); // Same artist, Song A < Song B
+        REQUIRE(track1 < track3); // Same artist, Song A < Song B
     }
 }
 

@@ -234,13 +234,13 @@ TEST_CASE("MusicLibrary statistics", "[music_library]") {
 TEST_CASE("MusicLibrary thread safety", "[music_library][thread]") {
     MusicLibrary library;
     const int num_threads = 4;
-    const int tracks_per_thread = 25;
+    static constexpr int tracks_per_thread = 25;
     
     SECTION("Concurrent additions") {
         std::vector<std::thread> threads;
         
         for (int t = 0; t < num_threads; ++t) {
-            threads.emplace_back([&library, t, tracks_per_thread]() {
+            threads.emplace_back([&library, t]() {
                 for (int i = 0; i < tracks_per_thread; ++i) {
                     Track track(
                         "Song " + std::to_string(t * tracks_per_thread + i),
@@ -266,7 +266,7 @@ TEST_CASE("MusicLibrary thread safety", "[music_library][thread]") {
         }
         
         std::vector<std::thread> threads;
-        std::atomic<int> total_found(0);
+        std::atomic<std::size_t> total_found(0);
         
         for (int t = 0; t < num_threads; ++t) {
             threads.emplace_back([&library, &total_found]() {

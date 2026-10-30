@@ -1,5 +1,6 @@
 #include "../include/catch.hpp"
 #include "audio_library/file_io.h"
+#include "audio_library/music_library.h"
 #include <fstream>
 #include <filesystem>
 
@@ -199,8 +200,7 @@ TEST_CASE("FileIO error handling", "[file_io]") {
     SECTION("Import from non-existent file") {
         fs::path non_existent = fs::temp_directory_path() / "does_not_exist.csv";
         
-        auto tracks = FileIO::import_csv(non_existent);
-        REQUIRE(tracks.empty());
+        REQUIRE_THROWS_AS(FileIO::import_csv(non_existent), std::runtime_error);
     }
     
     SECTION("Export to invalid path") {
@@ -249,3 +249,48 @@ TEST_CASE("FileIO progress callback", "[file_io]") {
         REQUIRE(progress_calls > 0); // Should have received progress updates
     }
 }
+
+#if defined(__linux__)
+TEST_CASE("Exports report buffered write failures", "[file_io][export][regression]") {
+    // /dev/full accepts opens but rejects writes, including the final buffer flush.
+    const fs::path full_path = "/dev/full";
+    std::ofstream full(full_path, std::ios::binary);
+    REQUIRE(full.is_open());
+    full << "probe";
+    REQUIRE(full.good());
+    full.flush();
+    REQUIRE_FALSE(full.good());
+
+    const std::vector<Track> tracks{Track("Song", "Artist", 180)};
+    const std::vector<FileIO::TrackPtr> pointers{std::make_shared<Track>(tracks[0])};
+    MusicLibrary library;
+    REQUIRE(library.add_track(tracks[0]));
+
+    SECTION("CSV values") {
+        REQUIRE_FALSE(FileIO::export_csv(full_path, tracks));
+    }
+    SECTION("JSON values") {
+        REQUIRE_FALSE(FileIO::export_json(full_path, tracks));
+    }
+    SECTION("M3U values") {
+        REQUIRE_FALSE(FileIO::export_playlist(full_path, tracks, "Favorites"));
+
+        TempFile destination("test_export_playlist.m3u");
+        REQUIRE(FileIO::export_playlist(destination.path(), tracks, "Favorites"));
+        const auto imported = FileIO::import_playlist(destination.path());
+        REQUIRE(imported == std::vector<std::string>{"Artist - Song.mp3"});
+    }
+    SECTION("CSV pointers") {
+        REQUIRE_FALSE(FileIO::export_csv(full_path, pointers));
+    }
+    SECTION("JSON pointers") {
+        REQUIRE_FALSE(FileIO::export_json(full_path, pointers));
+    }
+    SECTION("CSV library snapshot") {
+        REQUIRE_FALSE(library.export_to_csv(full_path.string()));
+    }
+    SECTION("JSON library snapshot") {
+        REQUIRE_FALSE(library.export_to_json(full_path.string()));
+    }
+}
+#endif
